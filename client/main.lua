@@ -109,13 +109,39 @@ local function importSkinToPed(ped, skin)
     end
 end
 
+-- BUGFIX (live report): getSkin()/applySkinToPlayer() only had real integrations for
+-- 'fivem-appearance' and 'illenium-appearance'. Every other Config.Appearance.system
+-- value (including the default 'esx_skin' AND custom ones like 'rcore_clothing') fell
+-- into an "else" branch that blindly fired 'skinchanger:getSkin' / 'skinchanger:loadSkin'
+-- + 'esx_skin:save'. If the server does not run esx_skin/skinchanger (e.g. it uses
+-- rcore_clothing instead), NOTHING listens to those events, so:
+--   - getSkin() never called its callback -> oldSkin stayed nil forever
+--   - applySkinToPlayer() silently did nothing visually on the real player ped, and
+--     esx_skin:save() wrote to a `users.skin` column rcore_clothing doesn't read, so the
+--     change did not persist and could be overwritten next time rcore reapplied its own
+--     saved skin (explains "a ruha nem jelenik meg / nem marad meg" reports).
+-- Fix: only use the skinchanger event path when we can actually detect a running
+-- skinchanger-compatible resource (esx_skin or the legacy 'skinchanger' resource).
+-- For everything else (including rcore_clothing and any unknown/custom system), fall
+-- back to directly manipulating the ped components via natives (exportSkinFromPed /
+-- importSkinToPed), which always works regardless of which appearance script is
+-- installed, since GTA ped components are native and framework-agnostic.
+local function hasSkinchangerCompat()
+    return GetResourceState('esx_skin') == 'started' or GetResourceState('skinchanger') == 'started'
+end
+
 local function getSkin(cb)
     if Config.Appearance.system == 'fivem-appearance' and GetResourceState('fivem-appearance') == 'started' then
         cb(exports['fivem-appearance']:getPedAppearance(PlayerPedId()))
     elseif Config.Appearance.system == 'illenium-appearance' and GetResourceState('illenium-appearance') == 'started' then
         cb(exports['illenium-appearance']:getPedAppearance(PlayerPedId()))
-    else
+    elseif Config.Appearance.system == 'esx_skin' and hasSkinchangerCompat() then
         TriggerEvent('skinchanger:getSkin', function(skin) cb(skin or exportSkinFromPed(PlayerPedId())) end)
+    else
+        -- Covers rcore_clothing and any other/unrecognized appearance system: read the
+        -- live ped components directly via natives instead of relying on an event that
+        -- nothing may be listening to.
+        cb(exportSkinFromPed(PlayerPedId()))
     end
 end
 
@@ -127,9 +153,30 @@ local function applySkinToPlayer(skin, save)
     elseif Config.Appearance.system == 'illenium-appearance' and GetResourceState('illenium-appearance') == 'started' then
         exports['illenium-appearance']:setPedAppearance(PlayerPedId(), skin)
         if save then TriggerServerEvent('realrpg_clothing_designer:saveAppearanceSkin', skin) end
-    else
+    elseif Config.Appearance.system == 'esx_skin' and hasSkinchangerCompat() then
         TriggerEvent('skinchanger:loadSkin', skin)
         if save then TriggerServerEvent('esx_skin:save', skin) end
+    else
+        -- rcore_clothing / unknown system fallback: apply directly via natives so the
+        -- change is ALWAYS visible on the real player ped, regardless of which
+        -- appearance script (if any) is installed on the server.
+        importSkinToPed(PlayerPedId(), skin)
+        if save then
+            -- Persist through our own storage as a best-effort fallback so at least our
+            -- own resource remembers it (used by getSkin:server / applyMetadataOutfit).
+            TriggerServerEvent('realrpg_clothing_designer:saveAppearanceSkin', skin)
+            -- Best-effort notice to rcore_clothing (or any other resource) that the ped's
+            -- components changed, in case it wants to resync its own cached copy. This is
+            -- guarded: if rcore_clothing isn't running or doesn't expose this export, it
+            -- is silently ignored instead of erroring the whole apply flow.
+            if GetResourceState('rcore_clothing') == 'started' then
+                pcall(function()
+                    if exports['rcore_clothing'] and exports['rcore_clothing'].refreshSkin then
+                        exports['rcore_clothing']:refreshSkin(PlayerPedId())
+                    end
+                end)
+            end
+        end
     end
 end
 
@@ -291,8 +338,14 @@ local function applyPreviewToPlayer(save)
         for k, v in pairs(skin) do oldSkin[k] = v end
         applySkinToPlayer(oldSkin, save)
     else
+        -- BUGFIX (live report): this "no oldSkin captured" fallback path (hit whenever
+        -- getSkin() returned nil, which it always did on servers without
+        -- esx_skin/skinchanger running - e.g. rcore_clothing setups) applied the skin to
+        -- the ped via natives (correct) but then unconditionally saved through
+        -- 'esx_skin:save', which nothing listens to on such servers. Route through our
+        -- own saveAppearanceSkin event instead so the change is actually persisted.
         importSkinToPed(PlayerPedId(), skin)
-        if save then getSkin(function(s) TriggerServerEvent('esx_skin:save', s) end) end
+        if save then getSkin(function(s) TriggerServerEvent('realrpg_clothing_designer:saveAppearanceSkin', s) end) end
     end
     notify(t('applied'), 'success')
 end
@@ -465,7 +518,14 @@ RegisterNetEvent('realrpg_clothing_designer:wearOnOff', function(kind, data)
             SetPedComponentVariation(ped, c.id, drawable, tonumber(data.texture) or 0, 2)
         end
     end
-    if Config.Appearance.saveOnApply then getSkin(function(skin) TriggerServerEvent('esx_skin:save', skin) end) end
+    -- BUGFIX (live report): this unconditionally saved through 'esx_skin:save', which
+    -- only works when esx_skin/skinchanger is actually running. On servers using
+    -- rcore_clothing (or any other appearance system) this event has no listener, so the
+    -- toggle appeared to work but was never persisted. Route through our own
+    -- saveAppearanceSkin event instead, consistent with applySkinToPlayer() above.
+    if Config.Appearance.saveOnApply then
+        getSkin(function(skin) TriggerServerEvent('realrpg_clothing_designer:saveAppearanceSkin', skin) end)
+    end
 end)
 
 RegisterNetEvent('realrpg_clothing_designer:applyMetadataOutfit', function(metadata)

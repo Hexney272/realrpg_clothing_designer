@@ -157,7 +157,30 @@ local function installDatabase()
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;]]
     }
     for _, q in ipairs(queries) do MySQL.query(q) end
+
+    -- BUGFIX (V14 live report): 'CREATE TABLE IF NOT EXISTS' is a no-op when the table
+    -- already exists - it does NOT add missing columns. If realrpg_clothing_designs (or
+    -- realrpg_clothing_orders) already existed on a server with an incomplete/older
+    -- schema (e.g. missing the `name` column), every query selecting/inserting that
+    -- column fails at runtime with "Unknown column 'name' in 'SELECT'" even though the
+    -- CREATE TABLE above defines it correctly for fresh installs. Only `is_public` had a
+    -- self-healing ALTER TABLE below; the rest of the design columns did not. Added full
+    -- ALTER TABLE ... ADD COLUMN IF NOT EXISTS coverage for every column in both tables so
+    -- an existing-but-incomplete table gets repaired automatically on next resource start.
+    MySQL.query("ALTER TABLE realrpg_clothing_designs ADD COLUMN IF NOT EXISTS name varchar(80) NOT NULL DEFAULT 'RealRPG Design'")
+    MySQL.query("ALTER TABLE realrpg_clothing_designs ADD COLUMN IF NOT EXISTS gender varchar(20) NOT NULL DEFAULT 'unknown'")
+    MySQL.query("ALTER TABLE realrpg_clothing_designs ADD COLUMN IF NOT EXISTS preview_type varchar(40) NOT NULL DEFAULT 'hoodie'")
+    MySQL.query('ALTER TABLE realrpg_clothing_designs ADD COLUMN IF NOT EXISTS skin longtext DEFAULT NULL')
+    MySQL.query('ALTER TABLE realrpg_clothing_designs ADD COLUMN IF NOT EXISTS components longtext DEFAULT NULL')
+    MySQL.query('ALTER TABLE realrpg_clothing_designs ADD COLUMN IF NOT EXISTS props longtext DEFAULT NULL')
+    MySQL.query('ALTER TABLE realrpg_clothing_designs ADD COLUMN IF NOT EXISTS canvas longtext DEFAULT NULL')
+    MySQL.query('ALTER TABLE realrpg_clothing_designs ADD COLUMN IF NOT EXISTS image mediumtext DEFAULT NULL')
     MySQL.query('ALTER TABLE realrpg_clothing_designs ADD COLUMN IF NOT EXISTS is_public tinyint(1) NOT NULL DEFAULT 0')
+
+    MySQL.query("ALTER TABLE realrpg_clothing_orders ADD COLUMN IF NOT EXISTS design_id int(11) DEFAULT NULL")
+    MySQL.query("ALTER TABLE realrpg_clothing_orders ADD COLUMN IF NOT EXISTS name varchar(80) NOT NULL DEFAULT 'RealRPG Outfit'")
+    MySQL.query("ALTER TABLE realrpg_clothing_orders ADD COLUMN IF NOT EXISTS type varchar(30) NOT NULL DEFAULT 'outfit'")
+    MySQL.query('ALTER TABLE realrpg_clothing_orders ADD COLUMN IF NOT EXISTS metadata longtext DEFAULT NULL')
     MySQL.query("ALTER TABLE realrpg_clothing_orders ADD COLUMN IF NOT EXISTS status varchar(30) NOT NULL DEFAULT 'pending'")
     MySQL.query('ALTER TABLE realrpg_clothing_orders ADD COLUMN IF NOT EXISTS price int(11) NOT NULL DEFAULT 0')
     MySQL.query('ALTER TABLE realrpg_clothing_orders ADD COLUMN IF NOT EXISTS reviewed_by varchar(80) DEFAULT NULL')

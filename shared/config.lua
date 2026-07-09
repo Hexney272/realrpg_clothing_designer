@@ -110,7 +110,12 @@ Config.Inventory = {
 
 Config.Appearance = {
     -- Primary: esx_skin. Other adapters are included as safe wrappers, not full replacements for paid appearance scripts.
-    system = 'esx_skin', -- esx_skin / fivem-appearance / illenium-appearance / qb-clothing / custom
+    -- Valid values: esx_skin / fivem-appearance / illenium-appearance / rcore_clothing / custom
+    -- NOTE: only 'esx_skin', 'fivem-appearance' and 'illenium-appearance' have dedicated
+    -- integrations. Any other value (including 'rcore_clothing') uses the native
+    -- ped-component fallback (GetPed*/SetPed* natives), which works with ANY appearance
+    -- script since it doesn't depend on that script's own events/exports.
+    system = 'rcore_clothing', -- set to your server's appearance script name
     saveOnApply = true,
     restoreOnCancel = true,
     stopOtherAppearanceScripts = false, -- RealRPG safety: false by default; enable only if you want RealRPG-like aggressive stop behavior.

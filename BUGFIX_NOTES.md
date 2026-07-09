@@ -70,3 +70,36 @@ Módosított fájlok: `fxmanifest.lua`, `server/main.lua`, `client/main.lua`.
     külön Node/JS runtime resource-ra és exports/HTTP-alapú kommunikációra lenne szükség.
     A diagnosztikai parancsok (`rcd_check`, `rcd_troubleshoot`) is jelzik ezt az
     "UNSUPPORTED" állapotot.
+
+
+
+## 3. kör (élesben tesztelés közben jelentett hibák: rcore_clothing kompatibilitás + adatbázis hiba)
+
+15. **KRITIKUS - `Unknown column 'name' in 'SELECT'` (SQL hiba élesben)**: a
+    `installDatabase()` `CREATE TABLE IF NOT EXISTS`-t használ, ami NEM módosítja a
+    táblát, ha az már létezik. Ha a `realrpg_clothing_designs` (vagy
+    `realrpg_clothing_orders`) tábla korábban hiányos oszlopokkal jött létre a
+    szervereden, a script sosem pótolta utólag a hiányzó oszlopokat (`name`, `gender`,
+    `preview_type`, `skin`, `components`, `props`, `canvas`, `image`) - csak az
+    `is_public` oszlopra volt öngyógyító `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`.
+    Javítva: mindkét tábla összes oszlopára hozzáadva a hiányzó `ALTER TABLE`
+    migrációkat, így egy hiányos tábla automatikusan kijavítja magát a resource
+    következő indításakor.
+16. **KRITIKUS - `rcore_clothing` kompatibilitás hiánya**: a `getSkin()`,
+    `applySkinToPlayer()`, a `wearOnOff` event és az "Alkalmazás" gomb
+    (`applyPreviewToPlayer`) mind feltétel nélkül `skinchanger:getSkin` /
+    `skinchanger:loadSkin` / `esx_skin:save` eventeket hívtak minden olyan esetben, ami
+    nem kifejezetten `fivem-appearance` vagy `illenium-appearance` volt - beleértve a
+    configban beállított `rcore_clothing`-ot is. Mivel az `rcore_clothing` nem hallgat
+    ezekre az eventekre, ez pontosan azt okozta, hogy:
+    - a preview "Alkalmazás" után a ruha nem jelent meg a valódi karakteren,
+    - a mentés (`saveOnApply`) csendben semmit nem csinált / rossz táblába írt.
+    Javítva: `Config.Appearance.system == 'esx_skin'` esetén továbbra is a
+    `skinchanger` eventeket használja (ha az `esx_skin`/`skinchanger` resource fut),
+    minden más esetben (`rcore_clothing` és bármilyen egyéb/ismeretlen rendszer)
+    natív ped-component natívokra (`GetPedDrawableVariation`/`SetPedComponentVariation`
+    stb.) esik vissza, amelyek framework-függetlenek és mindig működnek, plusz a saját
+    `realrpg_clothing_designer:saveAppearanceSkin` eventünkön keresztül perzisztálja az
+    adatot (nem a nem-létező `esx_skin:save` listenerre bízva).
+    A `Config.Appearance.system` alapértéke `'rcore_clothing'`-ra állítva, dokumentálva
+    a natív fallback működését.
