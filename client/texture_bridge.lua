@@ -48,9 +48,7 @@ RegisterNUICallback('getTemplateCatalog', function(_, cb)
 end)
 
 RegisterNUICallback('rescanTemplateCatalog', function(_, cb)
-    -- Server command/export already knows how to scan; use callback-compatible public catalog after command-side rescan is unavailable from client.
-    -- This keeps NUI stable. Run /clothingdesignerrescan once from console/admin after adding new files.
-    triggerCallback('realrpg_clothing_designer:getTemplateCatalog', cb)
+    triggerCallback('realrpg_clothing_designer:bridge:rescanTemplates', cb)
 end)
 
 RegisterNUICallback('extractTemplateTexture', function(data, cb)

@@ -160,10 +160,28 @@
 
   async function loadCatalog(rescan=false) {
     setStatus(rescan ? 'Template rescan...' : 'Template lista betöltése...');
-    const res = await post(rescan ? 'rescanTemplateCatalog' : 'getTemplateCatalog', {});
+    let res = await post(rescan ? 'rescanTemplateCatalog' : 'getTemplateCatalog', {});
     if (!res.ok) { setStatus(res.error || 'Template lista hiba'); return; }
+
     state.catalog = res.catalog || [];
-    renderTemplates(); setStatus(`Templates: ${state.catalog.length}`);
+
+    // First open quality-of-life: if the DB catalog is empty, run a real server-side rescan
+    // instead of showing an empty Templates tab and forcing the user to know the console command.
+    if (!rescan && state.catalog.length === 0) {
+      setStatus('Nincs template a DB-ben, automatikus rescan...');
+      const scan = await post('rescanTemplateCatalog', {});
+      if (scan.ok) {
+        res = scan;
+        state.catalog = scan.catalog || [];
+      } else {
+        setStatus(scan.error || 'Template rescan hiba');
+        return;
+      }
+    }
+
+    renderTemplates();
+    const scanned = res.rescan && typeof res.rescan.scanned !== 'undefined' ? ` · scanned ${res.rescan.scanned}, registered ${res.rescan.registered || 0}, skipped ${res.rescan.skipped || 0}` : '';
+    setStatus(`Templates: ${state.catalog.length}${scanned}`);
   }
 
   async function extractTexture() {

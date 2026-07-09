@@ -70,6 +70,33 @@ ESX.RegisterServerCallback('realrpg_clothing_designer:bridge:status', function(s
     bridgeGet('/status', cb)
 end)
 
+
+ESX.RegisterServerCallback('realrpg_clothing_designer:bridge:rescanTemplates', function(source, cb)
+    if not isBridgeAllowed(source) then cb({ ok = false, error = 'admin_only' }) return end
+
+    local rescanResult = nil
+    local ok, err = pcall(function()
+        rescanResult = exports[GetCurrentResourceName()]:rescanTemplates()
+    end)
+
+    if not ok then
+        cb({ ok = false, error = 'rescan_failed', detail = tostring(err) })
+        return
+    end
+
+    local catalog = {}
+    local okCatalog, catalogErr = pcall(function()
+        catalog = exports[GetCurrentResourceName()]:getTemplateCatalog() or {}
+    end)
+
+    if not okCatalog then
+        cb({ ok = false, error = 'catalog_after_rescan_failed', detail = tostring(catalogErr), rescan = rescanResult })
+        return
+    end
+
+    cb({ ok = true, rescan = rescanResult, catalog = catalog })
+end)
+
 ESX.RegisterServerCallback('realrpg_clothing_designer:bridge:extractTexture', function(source, cb, template)
     if not isBridgeAllowed(source) then cb({ ok = false, error = 'admin_only' }) return end
     bridgePost('/extract', {
