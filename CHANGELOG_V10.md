@@ -1,0 +1,12 @@
+# Changelog V10
+- version bump 10.0.0
+- docs-based compatibility layer added
+- RealRPG-style event aliases added
+- `openClothStore(clothing/barber/tattoo)` behavior added
+- `/giveclothingmenu` and `/giverestrictedclothingmenu` added
+- normal/restricted category permissions added
+- default clothing variations added
+- cloth prices and custom prices added
+- allowed ped model config added
+- server skin callback aliases added
+- README rewritten

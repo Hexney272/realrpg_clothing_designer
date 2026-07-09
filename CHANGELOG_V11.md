@@ -1,0 +1,11 @@
+# Changelog V11
+- Docs alapján átépített template folder szabályok
+- `templates/cloth_templates/male|female/<component>/` struktúra
+- támogatott component kulcsok: accs, berd, decl, feet, hair, hand, head, jbib, lowr, task, teef, uppr
+- preview root: `templates/template_previews/`
+- slot root: `templates/template_slots/`
+- startup sync behavior
+- addon-first export flow
+- replace export kikapcsolva
+- export output / mirror output előkészítés
+- SQL bővítés template_key, template_path, preview_path, slot_path, managed_preview, skipped_reason mezőkkel

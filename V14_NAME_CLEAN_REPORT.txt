@@ -1,0 +1,4 @@
+RealRPG name cleanup report
+===========================
+
+No 0R/0r references found in editable text files.

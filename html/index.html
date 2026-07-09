@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="hu">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>RealRPG Clothing Designer V10</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="app" class="hidden">
+    <div class="ambient one"></div>
+    <div class="ambient two"></div>
+
+    <aside class="sidebar glass">
+      <div class="brand">
+        <div class="logo">R</div>
+        <div>
+          <h1>RealRPG</h1>
+          <p>Clothing Designer V10</p>
+        </div>
+      </div>
+      <div class="modebar">
+        <span id="previewMode">PREVIEW</span>
+        <span id="coinLabel">RC</span>
+      </div>
+      <nav id="categoryTabs"></nav>
+      <div class="hint-card">
+        <b>3D kontroll</b>
+        <span>Q / E forgatás</span>
+        <span>Egérgörgő zoom</span>
+        <span>Kattintás: fókusz váltás</span>
+      </div>
+    </aside>
+
+    <main class="studio-zone">
+      <div class="topline glass">
+        <div>
+          <span class="eyebrow">LIVE 3D CLOTHING STUDIO</span>
+          <h2 id="studioTitle">Designer nézet</h2>
+        </div>
+        <div class="top-actions">
+          <button class="ghost" data-focus="full">Full</button>
+          <button class="ghost" data-focus="head">Head</button>
+          <button class="ghost" data-focus="torso">Torso</button>
+          <button class="ghost" data-focus="legs">Legs</button>
+          <button class="ghost" data-focus="feet">Feet</button>
+        </div>
+      </div>
+
+      <div class="preview-frame">
+        <div class="scanline"></div>
+        <div class="center-reticle">
+          <div></div><div></div><div></div><div></div>
+        </div>
+        <div class="floating-pill left">RealRPG Preview Object</div>
+        <div class="floating-pill right" id="genderPill">male</div>
+        <div class="rotate-controls glass">
+          <button id="rotLeft">◀</button>
+          <span>Forgatás</span>
+          <button id="rotRight">▶</button>
+        </div>
+      </div>
+    </main>
+
+    <section class="panel glass">
+      <div class="panel-header">
+        <div>
+          <span class="eyebrow" id="panelEyebrow">CLOTHING</span>
+          <h3 id="panelTitle">Ruházat</h3>
+        </div>
+        <button id="closeBtn" class="icon danger">×</button>
+      </div>
+
+      <div id="componentPanel" class="panel-body section active">
+        <div class="switch-row">
+          <label>Preview modell</label>
+          <select id="previewSelect"></select>
+        </div>
+        <div id="componentList" class="list"></div>
+        <div id="propList" class="list hidden"></div>
+      </div>
+
+      <div id="modelPanel" class="panel-body section">
+        <div class="info-card">Gender/model választó. Ha identity alapján akarod lockolni, Config.Appearance.listModelsByGender maradjon true.</div>
+        <div id="modelList" class="preset-grid"></div>
+      </div>
+
+      <div id="canvasPanel" class="panel-body section">
+        <label>Dizájn neve</label>
+        <input id="designName" value="RealRPG Custom Design" />
+        <label>Felirat</label>
+        <input id="designText" placeholder="REALRPG" />
+        <div class="double">
+          <div><label>Alapszín</label><input id="baseColor" type="color" value="#17172a" /></div>
+          <div><label>Neon szín</label><input id="neonColor" type="color" value="#8b5cf6" /></div>
+        </div>
+        <label>Mintázat</label>
+        <select id="pattern">
+          <option value="clean">Clean</option>
+          <option value="grid">Tech Grid</option>
+          <option value="carbon">Carbon</option>
+          <option value="noise">Noise</option>
+        </select>
+        <div class="canvas-preview" id="canvasPreview"><span>REALRPG</span></div>
+      </div>
+
+      <div id="presetPanel" class="panel-body section">
+        <div id="presetList" class="preset-grid"></div>
+      </div>
+
+      <div id="savedPanel" class="panel-body section">
+        <div class="double">
+          <button id="loadSaved" class="wide">Saját dizájnok</button>
+          <button id="loadOrders" class="wide">Rendelések</button>
+        </div>
+        <div id="savedList" class="list"></div>
+        <div id="orderList" class="list hidden"></div>
+      </div>
+
+      <div id="adminPanel" class="panel-body section">
+        <div class="info-card">Admin creator/editor: összes dizájn, playernek megnyitás, rendelés jóváhagyás/elutasítás és item kiadás.</div>
+        <div class="double">
+          <input id="adminTarget" placeholder="Player ID" />
+          <button id="adminOpenFor" class="wide">Megnyitás játékosnak</button>
+        </div>
+        <div class="double">
+          <button id="loadAdminDesigns" class="wide neon">Összes dizájn</button>
+          <button id="loadAdminOrders" class="wide neon">Függő rendelések</button>
+        </div>
+        <div class="switch-row">
+          <label>Order státusz szűrő</label>
+          <select id="adminOrderStatus">
+            <option value="pending">Függőben</option>
+            <option value="approved">Jóváhagyva</option>
+            <option value="ready">Elkészült</option>
+            <option value="rejected">Elutasítva</option>
+            <option value="all">Összes</option>
+          </select>
+        </div>
+        <div id="adminList" class="list"></div>
+        <div id="adminOrders" class="list hidden"></div>
+      </div>
+
+      <div id="screenshotPanel" class="panel-body section">
+        <div class="info-card">RealRPG-szerű image generator mód: fókuszáld a kategóriát, majd készíts képet screenshot-basic-kel.</div>
+        <button id="captureBtn" class="wide neon">Preview kép készítése</button>
+        <div id="captureResult" class="capture-box"></div>
+      </div>
+
+      <footer class="actions">
+        <button id="saveDesign" class="secondary">Dizájn mentése</button>
+        <button id="orderPart" class="secondary">Ruhadarab item</button>
+        <button id="orderOutfit" class="secondary">Outfit item</button>
+        <button id="applyBtn" class="primary">Alkalmazás</button>
+      </footer>
+    </section>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>
