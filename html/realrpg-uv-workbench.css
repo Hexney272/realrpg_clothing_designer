@@ -1,0 +1,68 @@
+/* RealRPG Clothing Designer V14.2 - UV Workbench skin
+   This stylesheet turns the V14.1 designer into the requested layout:
+   left live 3D preview, center UV/diffuse texture editor, right layers/templates dock. */
+:root{
+  --rr-bg:#05080f;--rr-panel:rgba(8,12,24,.84);--rr-panel2:rgba(12,18,34,.76);
+  --rr-border:rgba(122,162,255,.16);--rr-border-strong:rgba(139,92,246,.42);
+  --rr-text:#eef4ff;--rr-muted:#8e9dbc;--rr-purple:#8b5cf6;--rr-cyan:#22d3ee;--rr-green:#7cff3b;
+  --rr-shadow:0 22px 70px rgba(0,0,0,.55), inset 0 1px 0 rgba(255,255,255,.055);
+}
+html.rr-uv-skin body{background:transparent!important}
+html.rr-uv-skin #app{
+  background:
+    radial-gradient(circle at 38% 48%,rgba(139,92,246,.20),transparent 28%),
+    radial-gradient(circle at 82% 80%,rgba(34,211,238,.16),transparent 22%),
+    linear-gradient(180deg,rgba(2,4,10,.94),rgba(2,4,10,.82));
+}
+html.rr-uv-skin .ambient{opacity:.28}
+html.rr-uv-skin .rr-uv-topbar{
+  position:absolute;left:24px;right:24px;top:18px;height:50px;z-index:20;border:1px solid var(--rr-border);
+  border-radius:18px;background:linear-gradient(180deg,rgba(11,16,30,.92),rgba(5,8,18,.78));box-shadow:var(--rr-shadow);
+  display:flex;align-items:center;justify-content:space-between;padding:0 14px 0 16px;backdrop-filter:blur(14px)
+}
+html.rr-uv-skin .rr-uv-brand{display:flex;align-items:center;gap:11px;min-width:270px}.rr-uv-mark{width:32px;height:32px;border-radius:10px;background:linear-gradient(135deg,var(--rr-purple),var(--rr-cyan));display:grid;place-items:center;font-weight:900;box-shadow:0 0 22px rgba(139,92,246,.55)}
+html.rr-uv-skin .rr-uv-brand b{font-size:15px}.rr-uv-brand span{display:block;color:var(--rr-muted);font-size:10px;letter-spacing:1.2px;text-transform:uppercase;margin-top:1px}
+html.rr-uv-skin .rr-uv-tools{display:flex;align-items:center;gap:8px;color:var(--rr-muted);font-size:11px}.rr-uv-tool-pill{height:28px;padding:0 11px;border-radius:10px;border:1px solid var(--rr-border);background:rgba(255,255,255,.035);display:flex;align-items:center;gap:7px}.rr-uv-actions{display:flex;align-items:center;gap:8px}
+html.rr-uv-skin .rr-uv-actions button{height:32px;border-radius:11px;border:1px solid var(--rr-border);background:rgba(255,255,255,.055);color:var(--rr-text);font-weight:800;padding:0 13px;cursor:pointer}.rr-uv-actions button:hover{border-color:rgba(34,211,238,.55);filter:brightness(1.15)}
+html.rr-uv-skin .rr-uv-actions .quick{background:linear-gradient(135deg,rgba(124,255,59,.24),rgba(34,211,238,.08));color:#caffb1;border-color:rgba(124,255,59,.36)}
+html.rr-uv-skin .rr-uv-actions .export{background:linear-gradient(135deg,rgba(255,255,255,.9),rgba(190,210,255,.84));color:#111827;border-color:rgba(255,255,255,.45)}
+html.rr-uv-skin .rr-uv-actions .close{width:34px;padding:0;background:rgba(251,113,133,.16);color:#ffb4c0;border-color:rgba(251,113,133,.36)}
+
+/* Left app navigation becomes a compact vertical tool rail like the reference. */
+html.rr-uv-skin .sidebar{left:24px;top:82px;bottom:24px;width:96px;border-radius:22px;padding:14px 10px;z-index:12;display:flex;flex-direction:column;align-items:center}
+html.rr-uv-skin .sidebar .brand{margin:0 0 12px 0;justify-content:center}.sidebar .brand h1,.sidebar .brand p{display:none!important}.sidebar .logo{width:46px;height:46px;border-radius:15px;font-size:22px}
+html.rr-uv-skin .modebar{height:28px;width:72px;border-radius:10px;margin:0 0 12px 0;padding:0 7px}.modebar span:first-child{font-size:0}.modebar span:first-child:after{content:'UV';font-size:10px;color:var(--rr-cyan)}.modebar span:last-child{font-size:11px}
+html.rr-uv-skin nav{width:100%;gap:8px;align-items:center}.rr-uv-skin .tab{width:72px;height:46px;border-radius:15px;justify-content:center;padding:0;position:relative}.rr-uv-skin .tab b{display:none}.rr-uv-skin .tab span{font-size:10px;color:var(--rr-cyan);max-width:66px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.rr-uv-skin .tab.active{transform:none;background:linear-gradient(135deg,rgba(139,92,246,.33),rgba(34,211,238,.10));border-color:rgba(139,92,246,.5);box-shadow:0 0 22px rgba(139,92,246,.18)}
+html.rr-uv-skin .hint-card{margin-top:auto;width:72px;min-height:106px;padding:10px 7px;border-radius:14px;text-align:center}.hint-card b{font-size:10px}.hint-card span{display:none}.hint-card:after{content:'Q/E\\AZOOM';white-space:pre;color:var(--rr-muted);font-size:9px;line-height:1.7}
+
+/* Main live 3D preview pane. It is intentionally transparent in the center so the game-rendered ped/object is visible behind NUI. */
+html.rr-uv-skin .studio-zone{left:136px;right:auto;top:82px;bottom:24px;width:39vw;min-width:470px;z-index:8}
+html.rr-uv-skin .studio-zone .topline{height:42px;border-radius:16px;padding:0 12px 0 14px;background:linear-gradient(180deg,rgba(9,16,29,.90),rgba(5,8,16,.76));border-color:var(--rr-border)}
+html.rr-uv-skin .studio-zone .topline h2{font-size:14px}.rr-uv-skin .studio-zone .eyebrow{font-size:10px;color:#9aff7a}.rr-uv-skin .top-actions{gap:6px}.rr-uv-skin .ghost{height:28px;border-radius:10px;font-size:10px;padding:0 9px}
+html.rr-uv-skin .preview-frame{top:54px;border-radius:22px;background:linear-gradient(180deg,rgba(255,255,255,.025),rgba(0,0,0,.18));border-color:var(--rr-border);box-shadow:var(--rr-shadow)}
+html.rr-uv-skin .preview-frame:before{content:'3D PREVIEW';position:absolute;left:18px;top:14px;height:26px;display:flex;align-items:center;padding:0 10px;border-radius:999px;border:1px solid rgba(124,255,59,.25);background:rgba(2,6,14,.62);color:#b7ff99;font-size:10px;font-weight:900;letter-spacing:.6px;z-index:2}
+html.rr-uv-skin .scanline{opacity:.20}.rr-uv-skin .center-reticle{width:220px;height:280px;border-color:rgba(124,255,59,.16);box-shadow:0 0 50px rgba(124,255,59,.06)}.rr-uv-skin .center-reticle div{border-color:rgba(255,255,255,.82)}
+html.rr-uv-skin .floating-pill.left{left:18px;top:50px;background:rgba(0,0,0,.38);color:var(--rr-muted);font-size:10px}.rr-uv-skin .floating-pill.right{top:18px;right:18px;color:var(--rr-cyan)}
+html.rr-uv-skin .rotate-controls{bottom:18px;height:42px;border-radius:15px;background:rgba(5,8,18,.72)}
+
+/* Center UV editor pane. Existing .panel is repurposed as editor surface. */
+html.rr-uv-skin .panel{left:calc(136px + 39vw + 16px);right:348px;top:82px;bottom:24px;width:auto;border-radius:22px;z-index:9;background:linear-gradient(180deg,rgba(9,14,25,.88),rgba(4,7,14,.78));border-color:var(--rr-border);box-shadow:var(--rr-shadow)}
+html.rr-uv-skin .panel-header{height:42px;padding:0 12px 0 14px}.rr-uv-skin .panel-header h3{font-size:14px}.rr-uv-skin .panel-header .eyebrow{font-size:10px;color:#9aff7a}.rr-uv-skin .panel-header .icon{width:28px;height:28px;border-radius:10px;font-size:18px}
+html.rr-uv-skin .panel-body{padding:12px;overflow:auto}.rr-uv-skin #canvasPanel>label,.rr-uv-skin #canvasPanel>input,.rr-uv-skin #canvasPanel>.double,.rr-uv-skin #canvasPanel>select,.rr-uv-skin #canvasPanel>.canvas-preview{display:none!important}
+html.rr-uv-skin .actions{display:none!important}
+html.rr-uv-skin .rcd-editor{margin:0;height:100%;border:none;border-radius:0;background:transparent;padding:0;box-shadow:none;display:flex;flex-direction:column;gap:10px}.rr-uv-skin .rcd-title{height:28px;margin:0}.rr-uv-skin .rcd-title b:before{content:'# ';color:#9aff7a}.rr-uv-skin .rcd-title b{font-size:13px}.rr-uv-skin .rcd-title span{font-size:10px}
+html.rr-uv-skin #rcdCanvas{width:min(100%,72vh);max-height:calc(100vh - 260px);margin:0 auto;border-radius:8px;border-color:rgba(255,255,255,.16);box-shadow:0 0 42px rgba(255,255,255,.18),0 0 80px rgba(139,92,246,.10);background:#fff;image-rendering:auto}
+html.rr-uv-skin .rcd-editor label{font-size:10px;margin:4px 0 5px}.rr-uv-skin .rcd-editor input,.rr-uv-skin .rcd-editor textarea{height:32px;border-radius:10px;font-size:10px}.rr-uv-skin .rcd-editor textarea{min-height:42px}.rr-uv-skin .rcd-actions{margin:6px 0;gap:6px}.rr-uv-skin .rcd-actions button{height:31px;border-radius:10px;font-size:10px}.rr-uv-skin .rcd-layer-tools{grid-template-columns:1.5fr .65fr .65fr .62fr .62fr;gap:6px;margin-top:0}
+
+/* Right dock: layers / templates / saved. */
+html.rr-uv-skin .rr-uv-dock{position:absolute;right:24px;top:82px;bottom:24px;width:306px;border:1px solid var(--rr-border);border-radius:22px;background:linear-gradient(180deg,rgba(9,14,25,.90),rgba(4,7,14,.80));box-shadow:var(--rr-shadow);z-index:13;overflow:hidden;display:flex;flex-direction:column;backdrop-filter:blur(14px)}
+html.rr-uv-skin .rr-uv-dock-tabs{height:42px;border-bottom:1px solid var(--rr-border);display:grid;grid-template-columns:1fr 1fr 1fr}.rr-uv-dock-tabs button{background:transparent;border:none;color:var(--rr-muted);font-size:10px;font-weight:900;letter-spacing:.4px;cursor:pointer}.rr-uv-dock-tabs button.active{color:#9aff7a;background:linear-gradient(180deg,rgba(124,255,59,.10),transparent)}
+html.rr-uv-skin .rr-uv-dock-body{padding:12px;overflow:auto;display:none;flex:1}.rr-uv-dock-body.active{display:block}.rr-uv-dock-title{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}.rr-uv-dock-title b{font-size:12px;color:#dfffea}.rr-uv-dock-title span{font-size:10px;color:var(--rr-muted)}
+html.rr-uv-skin .rr-uv-card{border:1px solid var(--rr-border);background:rgba(255,255,255,.035);border-radius:14px;padding:10px;margin-bottom:10px;color:var(--rr-muted);font-size:11px;line-height:1.45}.rr-uv-card b{color:var(--rr-text)}
+html.rr-uv-skin .rr-uv-dock #rcdLayerList{display:block}.rr-uv-skin .rcd-layer{height:44px;border-radius:13px;background:linear-gradient(90deg,rgba(124,255,59,.13),rgba(255,255,255,.03));border-color:rgba(124,255,59,.18)}.rr-uv-skin .rcd-layer.active{border-color:rgba(124,255,59,.55);background:linear-gradient(90deg,rgba(124,255,59,.25),rgba(34,211,238,.06))}
+html.rr-uv-skin .rr-uv-slot{height:48px;border-radius:13px;border:1px solid rgba(124,255,59,.22);background:rgba(124,255,59,.08);display:flex;align-items:center;justify-content:space-between;padding:0 11px;color:#dfffea;margin-top:8px}.rr-uv-slot small{display:block;color:var(--rr-muted);font-size:10px;margin-top:2px}
+html.rr-uv-skin .rr-uv-mini-input{width:100%;height:32px;border-radius:10px;border:1px solid var(--rr-border);background:rgba(2,6,23,.6);color:var(--rr-text);font-size:10px;padding:0 9px;margin:6px 0}
+
+/* Old right panel sections still usable, but made compact when opened. */
+html.rr-uv-skin #componentPanel .row,html.rr-uv-skin #savedPanel .row,html.rr-uv-skin #adminPanel .row{border-radius:14px}.rr-uv-skin .slider-line{grid-template-columns:58px 1fr 28px;font-size:10px}
+@media(max-width:1400px){html.rr-uv-skin .studio-zone{width:34vw;min-width:390px}html.rr-uv-skin .panel{left:calc(136px + 34vw + 14px);right:330px}html.rr-uv-skin .rr-uv-dock{width:292px}}
