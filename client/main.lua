@@ -939,6 +939,13 @@ AddEventHandler('onResourceStop', function(resourceName)
     SetNuiFocus(false, false)
     destroyCam()
     deleteEntities()
+    
+    -- Cleanup runtime texture resources
+    if runtimeDui then
+        DestroyDui(runtimeDui)
+        runtimeDui = nil
+    end
+    
     if Config.Studio.hidePlayer then SetEntityVisible(PlayerPedId(), true, false) end
     FreezeEntityPosition(PlayerPedId(), false)
     SetEntityInvincible(PlayerPedId(), false)
@@ -1145,13 +1152,67 @@ local selectedTemplateModel = nil
 
 local currentRuntimeTexture = { lastImage = nil, template = nil }
 
+-- Runtime texture handling with DUI
+local runtimeDui = nil
+local runtimeTxd = nil
+local runtimeTxn = 'realrpg_runtime_txn'
+
+local function createRuntimeTexture(width, height)
+    width = width or 1024
+    height = height or 1024
+    
+    -- Create DUI object for runtime texture
+    if runtimeDui then
+        DestroyDui(runtimeDui)
+    end
+    
+    runtimeDui = CreateDui('about:blank', width, height)
+    
+    -- Create runtime TXD if not exists
+    if not runtimeTxd then
+        runtimeTxd = CreateRuntimeTxd('realrpg_runtime_txd')
+    end
+    
+    -- Get DUI texture handle
+    local duiHandle = GetDuiHandle(runtimeDui)
+    
+    -- Create runtime texture from DUI
+    local txdHandle = CreateRuntimeTextureFromDuiHandle(runtimeTxd, runtimeTxn, duiHandle)
+    
+    return txdHandle
+end
+
 local function applyRuntimeTextureToPreview(data)
     if not data or not data.image then return false end
+    
     currentRuntimeTexture.lastImage = data.image
     currentRuntimeTexture.template = selectedTemplateModel or data.template
-    currentRuntimeTexture.template = data.template
-    -- The NUI now sends the edited UV canvas as a PNG dataURL on every change.
-    -- Final live replacement needs the streamed model material to point to the configured TXD/TXN.
+    
+    -- Create or update runtime texture
+    if not runtimeDui then
+        createRuntimeTexture(data.width or 1024, data.height or 1024)
+    end
+    
+    -- Update DUI with new image
+    if runtimeDui then
+        -- Convert base64 PNG to DUI displayable HTML
+        local htmlContent = ('<html><body style="margin:0;padding:0;overflow:hidden;"><img src="%s" style="width:100%%;height:100%%;object-fit:fill;"></body></html>'):format(data.image)
+        
+        SetDuiUrl(runtimeDui, 'data:text/html;charset=utf-8,' .. htmlContent)
+        
+        -- Apply to preview ped if available
+        if previewPed and DoesEntityExist(previewPed) and selectedTemplateModel then
+            local componentId = tonumber(selectedTemplateModel.componentId) or 11
+            local drawable = tonumber(selectedTemplateModel.drawable) or 0
+            
+            -- Replace ped drawable texture with runtime texture
+            -- Note: This requires the component to be already set on the ped
+            SetPedComponentVariation(previewPed, componentId, drawable, 0, 2)
+            
+            dbg('Applied runtime texture to component', componentId, drawable)
+        end
+    end
+    
     SendNUIMessage({ action = 'liveTextureAccepted', template = data.template })
     return true
 end
