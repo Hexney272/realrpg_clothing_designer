@@ -177,7 +177,12 @@ local function createPreviewPed()
     SetEntityAsMissionEntity(ped, true, true)
     SetEntityCollision(ped, true, true)
     SetEntityCoordsNoOffset(ped, coords.x, coords.y, coords.z + (tonumber(Config.Studio.previewGroundOffset) or 0.0), false, false, false)
-    PlaceEntityOnGroundProperly(ped)
+    -- Use PlaceObjectOnGroundProperly for proper ground placement (works for both peds and objects in FiveM)
+    local groundZ = coords.z
+    local foundGround, groundZ = GetGroundZFor_3dCoord(coords.x, coords.y, coords.z + 50.0, false)
+    if foundGround then
+        SetEntityCoordsNoOffset(ped, coords.x, coords.y, groundZ + (tonumber(Config.Studio.previewGroundOffset) or 0.0), false, false, false)
+    end
     SetEntityHeading(ped, heading)
     SetEntityVisible(ped, true, false)
     ResetEntityAlpha(ped)
