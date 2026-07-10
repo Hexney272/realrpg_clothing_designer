@@ -1152,6 +1152,51 @@ local selectedTemplateModel = nil
 
 local currentRuntimeTexture = { lastImage = nil, template = nil }
 
+-- Screenshot-based preview system
+local previewUpdateInterval = 150 -- ms
+local lastPreviewUpdate = 0
+local previewScreenshotActive = false
+
+function capturePreviewScreenshot()
+    if not uiOpen or not previewPed or not DoesEntityExist(previewPed) then return end
+    
+    if GetResourceState('screenshot-basic') ~= 'started' then
+        dbg('screenshot-basic resource nincs elindítva')
+        return
+    end
+    
+    local now = GetGameTimer()
+    if now - lastPreviewUpdate < previewUpdateInterval then return end
+    lastPreviewUpdate = now
+    
+    if previewScreenshotActive then return end -- Prevent overlap
+    previewScreenshotActive = true
+    
+    exports['screenshot-basic']:requestScreenshot({
+        encoding = 'png',
+        quality = 0.82
+    }, function(dataUrl)
+        previewScreenshotActive = false
+        
+        if dataUrl and uiOpen then
+            SendNUIMessage({
+                action = 'updatePreviewImage',
+                imageData = dataUrl
+            })
+        end
+    end)
+end
+
+-- Auto-refresh thread for live preview
+CreateThread(function()
+    while true do
+        if uiOpen and previewPed then
+            capturePreviewScreenshot()
+        end
+        Wait(previewUpdateInterval)
+    end
+end)
+
 -- Runtime texture handling with DUI
 local runtimeDui = nil
 local runtimeTxd = nil
@@ -1219,6 +1264,17 @@ end
 
 RegisterNUICallback('liveTextureUpdate', function(data, cb)
     cb({ ok = applyRuntimeTextureToPreview(data) })
+    
+    -- Trigger preview screenshot update after texture change
+    Wait(80)
+    capturePreviewScreenshot()
+end)
+
+RegisterNUICallback('layerChanged', function(data, cb)
+    -- Manual preview update when layers change
+    Wait(50)
+    capturePreviewScreenshot()
+    cb({ ok = true })
 end)
 
 RegisterNUICallback('editorTool', function(data, cb)
