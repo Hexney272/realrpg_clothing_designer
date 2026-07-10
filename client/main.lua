@@ -165,31 +165,35 @@ local function createPreviewPed()
         return nil
     end
 
-    -- Do not subtract one metre from Z. That buried the mannequin on many maps,
-    -- which made the preview window look completely black.
-    local ped = CreatePed(4, hash, coords.x, coords.y, coords.z + (tonumber(Config.Studio.previewGroundOffset) or 0.0), heading, false, false)
+    -- Create ped at spawn position with proper ground offset
+    local ped = CreatePed(4, hash, coords.x, coords.y, coords.z, heading, false, false)
     SetModelAsNoLongerNeeded(hash)
     if not ped or ped == 0 or not DoesEntityExist(ped) then
         dbg('CreatePed failed for preview model')
         return nil
     end
 
-    SetEntityAsMissionEntity(ped, true, true)
-    SetEntityCollision(ped, true, true)
-    SetEntityCoordsNoOffset(ped, coords.x, coords.y, coords.z + (tonumber(Config.Studio.previewGroundOffset) or 0.0), false, false, false)
-    -- Use PlaceObjectOnGroundProperly for proper ground placement (works for both peds and objects in FiveM)
+    -- Find ground level and place ped properly
     local groundZ = coords.z
     local foundGround, groundZ = GetGroundZFor_3dCoord(coords.x, coords.y, coords.z + 50.0, false)
     if foundGround then
         SetEntityCoordsNoOffset(ped, coords.x, coords.y, groundZ + (tonumber(Config.Studio.previewGroundOffset) or 0.0), false, false, false)
     end
+    
+    SetEntityAsMissionEntity(ped, true, true)
+    SetEntityCollision(ped, true, true)
     SetEntityHeading(ped, heading)
     SetEntityVisible(ped, true, false)
+    SetEntityAlpha(ped, 255, false)
     ResetEntityAlpha(ped)
     SetEntityLodDist(ped, 1000)
+    
     makeBaseMannequin(ped)
+    
+    -- Ensure ped is visible for preview
     SetEntityVisible(ped, true, false)
-    ResetEntityAlpha(ped)
+    SetEntityAlpha(ped, 255, false)
+    
     return ped
 end
 
@@ -325,14 +329,23 @@ local function setupPreview(kind, keepSkin)
     local previousSkin = keepSkin and collectPreviewSkin() or nil
     deleteEntities()
     previewState.previewType = kind or previewState.previewType or 'hoodie'
-    previewObject = createPreviewObject(previewState.previewType)
-    if previewObject then
-        previewState.mode = 'separate_object'
-    else
-        previewPed = createPreviewPed()
+    
+    -- For clothing components (jbib, etc), always use ped preview
+    -- Objects would require separate 3D model exports
+    previewPed = createPreviewPed()
+    if previewPed then
         previewState.mode = 'ped_preview'
-        if previousSkin and previewPed then importSkinToPed(previewPed, previousSkin) end
+        if previousSkin and previewPed then 
+            importSkinToPed(previewPed, previousSkin) 
+        end
+        -- Make sure the preview ped is visible
+        SetEntityVisible(previewPed, true, false)
+        SetEntityAlpha(previewPed, 255, false)
+    else
+        previewState.mode = 'failed'
+        return
     end
+    
     currentFov = (Config.Focus[Config.Studio.defaultFocus] or Config.Focus.full).fov
     local data = Config.PreviewObjects[previewState.previewType]
     Wait(75)
@@ -1161,14 +1174,28 @@ RegisterNUICallback('loadTemplateForPreview', function(data, cb)
     end
     if uiOpen then
         setupPreview(previewState.previewType, true)
-        -- If the asset is a freemode clothing component instead of a true object model,
-        -- apply it on the hidden/isolated preview ped as a technical fallback. A true standalone
-        -- 3D object still requires exported object/worker output.
-        if previewPed and data and data.componentId and data.drawable then
-            SetPedComponentVariation(previewPed, tonumber(data.componentId) or 11, tonumber(data.drawable) or 0, tonumber(data.texture) or 0, 2)
-        elseif previewPed and data and data.category == 'jbib' and data.drawable then
-            SetPedComponentVariation(previewPed, 11, tonumber(data.drawable) or 0, tonumber(data.texture) or 0, 2)
+        
+        -- Apply the clothing component to the preview ped
+        if previewPed and DoesEntityExist(previewPed) then
+            local componentId = tonumber(data.componentId) or 11
+            local drawable = tonumber(data.drawable) or 0
+            local texture = tonumber(data.texture) or 0
+            
+            -- For jbib category, always use component 11 (torso)
+            if data.category == 'jbib' then
+                componentId = 11
+            end
+            
+            -- Apply the component variation
+            SetPedComponentVariation(previewPed, componentId, drawable, texture, 2)
+            
+            -- Make absolutely sure the ped is visible
+            SetEntityVisible(previewPed, true, false)
+            SetEntityAlpha(previewPed, 255, false)
+            
+            dbg('Applied component:', componentId, drawable, texture)
         end
+        
         -- Ensure camera focuses on the correct area after loading template
         Wait(100)
         local previewData = Config.PreviewObjects[previewState.previewType]
