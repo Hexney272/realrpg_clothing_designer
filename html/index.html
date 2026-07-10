@@ -1,129 +1,122 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="hu">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>RealRPG Clothing Designer V15</title>
-  <link rel="stylesheet" href="uv_workbench.css" />
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>RealRPG Clothing Studio</title>
+  <link rel="stylesheet" href="uv_workbench.css">
 </head>
 <body>
-  <div id="app" class="hidden">
-    <header class="topbar glass">
-      <div class="brand">
-        <div class="logo">R</div>
-        <div>
-          <h1>RealRPG Clothing Designer</h1>
-          <p>UV Texture Workbench · Live 3D Preview</p>
-        </div>
+<div id="app" class="hidden">
+  <div class="ambient a1"></div><div class="ambient a2"></div>
+  <header class="topbar panel">
+    <div class="brand"><div class="mark">R</div><div><h1>REALRPG CLOTHING STUDIO</h1><p>In-game UV designer · live preview · approval workflow</p></div></div>
+    <div class="head-meta"><span id="playerName">Játékos</span><span id="currencyLabel">0 RC</span><span id="workerBadge" class="badge warn">WORKER…</span></div>
+    <div class="head-actions">
+      <button id="saveDesignTop" class="btn">Mentés</button>
+      <button id="orderTop" class="btn accent">Megrendelés</button>
+      <button id="applyClose" class="btn success">Felvétel</button>
+      <button id="closeBtn" class="icon-btn danger" aria-label="Bezárás">×</button>
+    </div>
+  </header>
+
+  <aside class="leftbar panel">
+    <button class="nav active" data-section="studio"><b>✦</b><span>Stúdió</span></button>
+    <button class="nav" data-section="templates"><b>▦</b><span>Sablonok</span></button>
+    <button class="nav" data-section="wardrobe"><b>▣</b><span>Ruhatár</span></button>
+    <button class="nav" data-section="orders"><b>◫</b><span>Rendelések</span></button>
+    <button class="nav admin-only hidden" data-section="admin"><b>◆</b><span>Admin</span></button>
+    <button class="nav" data-section="settings"><b>⚙</b><span>Beállítás</span></button>
+    <div class="left-spacer"></div>
+    <button id="undoBtn" class="nav compact"><b>↶</b><span>Vissza</span></button>
+    <button id="redoBtn" class="nav compact"><b>↷</b><span>Újra</span></button>
+  </aside>
+
+  <main class="main-grid">
+    <section class="preview panel">
+      <div class="panel-head"><div><b>ÉLŐ 3D ELŐNÉZET</b><small id="previewMode">PED</small></div><div class="view-switch"><button data-focus="full" class="active">Teljes</button><button data-focus="head">Fej</button><button data-focus="torso">Felső</button><button data-focus="legs">Láb</button><button data-focus="feet">Cipő</button></div></div>
+      <div class="preview-window">
+        <div class="preview-grid"></div><div class="scan-line"></div><div class="frame-corners"></div>
+        <div class="preview-caption"><span id="activeGarment">Nincs sablon kiválasztva</span><small>Q / E forgatás · egérgörgő zoom</small></div>
+        <div class="rotate"><button id="rotLeft">◀</button><span>MODELL FORGATÁSA</span><button id="rotRight">▶</button></div>
       </div>
-      <div class="top-actions">
-        <button id="quickFitBtn" class="btn neon">✦ Quick AI Fit</button>
-        <button id="savePngBtn" class="btn">Save PNG</button>
-        <button id="exportYtdBtn" class="btn primary">Export .YTD</button>
-        <button id="closeBtn" class="btn danger">×</button>
+      <div class="quick-components"><select id="componentSelect"></select><input id="drawableRange" type="range" min="0" max="0" value="0"><span id="drawableValue">0</span><input id="textureRange" type="range" min="0" max="0" value="0"><span id="textureValue">0</span></div>
+    </section>
+
+    <section class="editor panel">
+      <div class="panel-head"><div><b>UV / DIFFUSE EDITOR</b><small id="canvasState">1024 × 1024</small></div><div class="editor-actions"><button id="addTextBtn">+ Szöveg</button><button id="addImageBtn">+ Kép</button><button id="addColorBtn">+ Szín</button><input id="imageFile" type="file" accept="image/png,image/jpeg,image/webp" hidden></div></div>
+      <div class="canvas-area" id="canvasArea"><canvas id="uvCanvas" width="1024" height="1024"></canvas><div id="emptyCanvas" class="empty"><b>Válassz egy YTD sablont</b><span>A rendszer kinyeri az eredeti diffuse textúrát, erre építheted a rétegeket.</span><button id="goTemplates">Sablonok megnyitása</button></div></div>
+      <div class="editor-status"><span id="bridgeStatus">Bridge ellenőrzése…</span><span id="activeTemplateText">Template: —</span></div>
+    </section>
+  </main>
+
+  <aside class="right panel">
+    <section class="section active" id="section-studio">
+      <div class="section-title"><div><b>RÉTEGEK</b><small id="layerCount">0 elem</small></div><button id="livePreviewBtn" class="mini accent">Live preview</button></div>
+      <div id="layerList" class="list layers"></div>
+      <div class="inspector">
+        <div class="section-title"><div><b>INSPECTOR</b><small id="selectedType">Nincs kijelölés</small></div><div><button id="layerUp" class="square">↑</button><button id="layerDown" class="square">↓</button></div></div>
+        <div id="layerTextField" class="inspector-field"><label>Szöveg</label><input id="layerText" placeholder="REALRPG"></div>
+        <div class="cols">
+          <div id="layerColorField" class="inspector-field"><label>Szín</label><input id="layerColor" type="color" value="#ffffff"></div>
+          <div id="layerGlowField" class="inspector-field"><label>Fény</label><input id="layerGlow" type="color" value="#8b5cf6"></div>
+        </div>
+        <div id="imageToolsField" class="inspector-field hidden">
+          <label>Képjavítás</label>
+          <button id="removeDarkBgBtn" class="wide image-tool">Fekete háttér eltávolítása</button>
+          <small class="field-help">A sötét hátteret átlátszóvá alakítja, a világos logórészeket megtartja.</small>
+        </div>
+        <label>Átlátszóság <span id="opacityText">100%</span></label><input id="layerOpacity" type="range" min="0" max="100" value="100">
+        <div id="layerSizeField" class="inspector-field"><label>Méret <span id="sizeText">64</span></label><input id="layerSize" type="range" min="8" max="600" value="64"></div>
+        <div id="layerRotationField" class="inspector-field"><label>Forgatás <span id="rotationText">0°</span></label><input id="layerRotation" type="range" min="-180" max="180" value="0"></div>
+        <div class="cols"><button id="dupLayerBtn">Másolat</button><button id="delLayerBtn" class="danger-soft">Törlés</button></div>
       </div>
-    </header>
+      <div class="bottom-actions"><button id="clearLiveBtn">Preview törlése</button><button id="downloadPngBtn">PNG export</button></div>
+    </section>
 
-    <aside class="toolrail glass">
-      <button data-tool="select" class="tool active">↖</button>
-      <button data-tool="move" class="tool">✥</button>
-      <button data-tool="text" class="tool">T</button>
-      <button data-tool="image" class="tool">▧</button>
-      <button data-tool="color" class="tool">◈</button>
-      <button data-tool="erase" class="tool">⌫</button>
-      <button id="undoBtn" class="tool bottom">↶</button>
-      <button id="redoBtn" class="tool">↷</button>
-    </aside>
+    <section class="section" id="section-templates">
+      <div class="section-title"><div><b>SABLON KATALÓGUS</b><small id="templateCount">0 sablon</small></div><button id="rescanBtn" class="mini admin-only hidden">Újraolvasás</button></div>
+      <div class="cols"><select id="genderFilter"><option value="all">Minden nem</option><option value="male">Férfi</option><option value="female">Női</option></select><select id="componentFilter"><option value="all">Minden rész</option></select></div>
+      <input id="templateSearch" class="search" placeholder="Keresés fájlnév vagy kategória alapján…">
+      <div id="templateList" class="list templates"></div>
+      <button id="extractBtn" class="wide accent">Eredeti textúra betöltése</button>
+    </section>
 
-    <main class="workspace">
-      <section class="preview-pane glass">
-        <div class="pane-head"><b>3D PREVIEW</b><span id="previewMode">PED</span></div>
-        <div class="preview-help">A forgatható GTA preview a panel mögött látszik. Q/E vagy az alsó gombok.</div>
-        <div class="reticle"><i></i><i></i><i></i><i></i></div>
-        <div class="rotate-controls glass">
-          <button id="rotLeft">◀</button><span>Forgatás</span><button id="rotRight">▶</button>
-        </div>
-        <div class="focus-row">
-          <button data-focus="full">Full</button><button data-focus="head">Head</button><button data-focus="torso">Torso</button><button data-focus="legs">Legs</button><button data-focus="feet">Feet</button>
-        </div>
-      </section>
+    <section class="section" id="section-wardrobe">
+      <div class="section-title"><div><b>SAJÁT RUHATÁR</b><small>Mentett tervek</small></div><button id="refreshDesigns" class="mini">Frissítés</button></div>
+      <input id="designSearch" class="search" placeholder="Keresés a tervek között…">
+      <div id="designList" class="list cards"></div>
+    </section>
 
-      <section class="editor-pane glass">
-        <div class="pane-head"><b id="editorTitle">EDITOR</b><span id="zoomLabel">100%</span></div>
-        <div class="canvas-wrap" id="canvasWrap">
-          <canvas id="uvCanvas" width="1024" height="1024"></canvas>
-          <div id="emptyCanvas" class="empty-canvas">
-            <b>Nincs betöltött UV textúra</b>
-            <span>Válassz template-et jobb oldalt, majd kattints: Texture betöltés</span>
-          </div>
-        </div>
-        <div class="editor-footer">
-          <span id="bridgeStatus">Worker: nincs ellenőrizve</span>
-          <span id="activeTemplateText">Template: nincs kiválasztva</span>
-        </div>
-      </section>
-    </main>
+    <section class="section" id="section-orders">
+      <div class="section-title"><div><b>RENDELÉSEIM</b><small>Gyártási állapot</small></div><button id="refreshOrders" class="mini">Frissítés</button></div>
+      <div id="orderList" class="list cards"></div>
+    </section>
 
-    <aside class="sidepanel glass">
-      <nav class="tabs">
-        <button data-tab="layers" class="active">Layers</button>
-        <button data-tab="templates">Templates</button>
-        <button data-tab="saved">Saved</button>
-      </nav>
+    <section class="section" id="section-admin">
+      <div class="section-title"><div><b>ADMIN JÓVÁHAGYÁS</b><small>Rendelések és tervek</small></div><button id="refreshAdmin" class="mini">Frissítés</button></div>
+      <div class="cols"><select id="adminStatus"><option value="pending">Függőben</option><option value="approved">Jóváhagyva</option><option value="ready">Elkészült</option><option value="rejected">Elutasítva</option><option value="all">Összes</option></select><input id="adminTarget" type="number" min="1" placeholder="Player ID"></div>
+      <button id="openForPlayer" class="wide">Designer megnyitása játékosnak</button>
+      <div class="subtabs"><button class="active" data-admin-tab="orders">Rendelések</button><button data-admin-tab="designs">Tervek</button></div>
+      <div id="adminOrderList" class="list cards"></div><div id="adminDesignList" class="list cards hidden"></div>
+    </section>
 
-      <section id="tab-layers" class="tabpage active">
-        <div class="section-title"><b>LAYERS</b><span id="layerCount">0</span></div>
-        <div class="layer-actions">
-          <button id="addTextBtn">+ Text</button>
-          <button id="addColorBtn">+ Color</button>
-          <button id="addImageBtn">+ Image</button>
-        </div>
-        <input id="imageFile" type="file" accept="image/*" hidden />
-        <div id="layerList" class="layer-list"></div>
+    <section class="section" id="section-settings">
+      <div class="section-title"><div><b>EXPORT ÉS RENDSZER</b><small>Bridge / YTD beállítások</small></div><button id="statusBtn" class="mini">Teszt</button></div>
+      <label>Dizájn neve</label><input id="designName" value="RealRPG Custom Design" maxlength="80">
+      <label>YTD output fájlnév</label><input id="outputName" placeholder="realrpg_custom_001.ytd">
+      <label>Eredeti TXD név</label><input id="originalTxd" placeholder="mp_m_freemode_01^...">
+      <label>Eredeti texture név</label><input id="originalTxn" placeholder="jbib_diff_000_a_uni">
+      <label>Haladó template JSON</label><textarea id="templateJson" spellcheck="false" placeholder='{"textureName":"jbib_diff_000_a_uni"}'></textarea>
+      <button id="exportYtdBtn" class="wide accent admin-only hidden">Kész YTD exportálása</button>
+      <button id="captureBtn" class="wide">3D előnézeti kép készítése</button>
+      <div id="diagnostics" class="diagnostics"></div>
+    </section>
+  </aside>
 
-        <div class="inspector">
-          <h3>Inspector</h3>
-          <label>Text</label><input id="layerText" placeholder="REALRPG" />
-          <div class="grid2">
-            <div><label>Color</label><input id="layerColor" type="color" value="#ffffff" /></div>
-            <div><label>Glow</label><input id="layerGlow" type="color" value="#8b5cf6" /></div>
-          </div>
-          <label>Opacity</label><input id="layerOpacity" type="range" min="1" max="100" value="100" />
-          <label>Size</label><input id="layerSize" type="range" min="10" max="180" value="64" />
-          <div class="grid2">
-            <button id="dupLayerBtn">Duplicate</button>
-            <button id="delLayerBtn" class="danger-soft">Delete</button>
-          </div>
-        </div>
-      </section>
-
-      <section id="tab-templates" class="tabpage">
-        <div class="section-title"><b>TEMPLATES</b><button id="rescanBtn">Rescan</button></div>
-        <div class="filters">
-          <select id="genderFilter"><option value="all">All gender</option><option value="male">Male</option><option value="female">Female</option></select>
-          <select id="componentFilter"><option value="all">All parts</option><option value="head">Head / Mask</option><option value="jbib">Jacket</option><option value="uppr">Upper</option><option value="lowr">Lower</option><option value="feet">Shoes</option><option value="accs">Accessories</option><option value="hand">Hands</option><option value="task">Bag</option><option value="decl">Decals</option></select>
-        </div>
-        <div id="templateList" class="template-list"></div>
-        <button id="extractBtn" class="wide primary">Texture betöltés</button>
-        <button id="livePreviewBtn" class="wide neon">Live texture preview</button>
-        <button id="clearLiveBtn" class="wide">Live preview törlés</button>
-      </section>
-
-      <section id="tab-saved" class="tabpage">
-        <div class="section-title"><b>SAVED / EXPORT</b></div>
-        <label>Output .ytd név</label>
-        <input id="outputName" placeholder="realrpg_custom_mask_001.ytd" />
-        <label>Original TXD name live previewhez</label>
-        <input id="originalTxd" placeholder="mp_m_freemode_01_mp_m_realrpg" />
-        <label>Original texture name</label>
-        <input id="originalTxn" placeholder="berd_diff_004_a_uni" />
-        <label>Extra template JSON</label>
-        <textarea id="templateJson" placeholder='{"textureName":"berd_diff_004_a_uni"}'></textarea>
-        <button id="statusBtn" class="wide">Worker teszt</button>
-        <button id="downloadPngBtn" class="wide">PNG letöltés</button>
-      </section>
-    </aside>
-  </div>
-  <script src="uv_workbench.js"></script>
+  <div id="modal" class="modal hidden"><div class="modal-card panel"><h2 id="modalTitle">Megerősítés</h2><p id="modalText"></p><input id="modalInput" class="hidden"><textarea id="modalTextarea" class="hidden"></textarea><div><button id="modalCancel">Mégse</button><button id="modalConfirm" class="accent">Rendben</button></div></div></div>
+  <div id="toasts" class="toasts"></div>
+</div>
+<script src="uv_workbench.js"></script>
 </body>
 </html>

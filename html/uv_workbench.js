@@ -1,249 +1,52 @@
 (() => {
-  const $ = (id) => document.getElementById(id);
-  const qsa = (sel) => Array.from(document.querySelectorAll(sel));
-  const post = (name, data = {}) => fetch(`https://${GetParentResourceName()}/${name}`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data)
-  }).then(r => r.json()).catch(err => ({ ok: false, error: String(err) }));
-
-  const componentMap = {
-    head: { id: 1, key: 'mask_1', tex: 'mask_2', focus: 'head' },
-    accs: { id: 7, key: 'chain_1', tex: 'chain_2', focus: 'head' },
-    decl: { id: 10, key: 'decals_1', tex: 'decals_2', focus: 'torso' },
-    feet: { id: 6, key: 'shoes_1', tex: 'shoes_2', focus: 'feet' },
-    hand: { id: 3, key: 'arms', tex: 'arms_2', focus: 'torso' },
-    jbib: { id: 11, key: 'torso_1', tex: 'torso_2', focus: 'torso' },
-    lowr: { id: 4, key: 'pants_1', tex: 'pants_2', focus: 'legs' },
-    task: { id: 5, key: 'bags_1', tex: 'bags_2', focus: 'torso' },
-    uppr: { id: 8, key: 'tshirt_1', tex: 'tshirt_2', focus: 'torso' }
-  };
-
-  const state = {
-    visible: false,
-    catalog: [], filtered: [], template: null,
-    layers: [], selectedLayer: -1,
-    canvas: null, ctx: null, bg: null,
-    dragging: false, dragStart: null, history: [], redo: [], zoom: 1,
-    mode: 'ped_fallback'
-  };
-
-  function setStatus(text) { $('bridgeStatus').textContent = text; }
-  function safeJson(value) { try { return JSON.parse(value || '{}'); } catch { return {}; } }
-  function activeTemplatePayload() {
-    const extra = safeJson($('templateJson').value);
-    const t = state.template || {};
-    const textureName = $('originalTxn').value || extra.textureName || t.texture_name || t.textureName || t.name || '';
-    return {
-      ...extra,
-      id: t.id,
-      name: t.name,
-      gender: t.gender,
-      component: t.component_key || t.category,
-      category: t.category,
-      drawable: Number(t.drawable || 0),
-      texture: Number(t.texture || 0),
-      templatePath: t.template_path || t.templatePath,
-      yddPath: (t.file_type === 'ydd' ? t.template_path : undefined) || extra.yddPath,
-      ytdPath: (t.file_type === 'ytd' ? t.template_path : undefined) || extra.ytdPath || extra.templateYtd,
-      textureName,
-      originalTxn: textureName,
-      txdName: $('originalTxd').value || extra.txdName || extra.txd || ''
-    };
-  }
-  function fileLabel(t) { return `${t.gender || ''}/${t.category || t.component_key || ''}/${t.file_name || t.name || ''}`; }
-
-  function pushHistory() {
-    if (!state.canvas) return;
-    try {
-      state.history.push(JSON.stringify({ layers: state.layers.map(l => ({...l, img: undefined, imgSrc: l.imgSrc || null})) }));
-      if (state.history.length > 30) state.history.shift();
-      state.redo = [];
-    } catch {}
-  }
-  function restoreSnapshot(s) {
-    if (!s) return;
-    const data = JSON.parse(s);
-    state.layers = data.layers || [];
-    state.selectedLayer = Math.min(state.selectedLayer, state.layers.length - 1);
-    Promise.all(state.layers.filter(l => l.imgSrc).map(l => loadImage(l.imgSrc).then(img => { l.img = img; }).catch(()=>{}))).then(() => { draw(); renderLayers(); syncInspector(); });
-  }
-
-  function draw() {
-    const c = state.canvas, ctx = state.ctx;
-    if (!c || !ctx) return;
-    ctx.clearRect(0,0,c.width,c.height);
-    ctx.fillStyle = '#ffffff'; ctx.fillRect(0,0,c.width,c.height);
-    if (state.bg) ctx.drawImage(state.bg,0,0,c.width,c.height);
-    for (const layer of state.layers) {
-      if (layer.hidden) continue;
-      ctx.save(); ctx.globalAlpha = Number(layer.opacity ?? 1);
-      if (layer.type === 'color') { ctx.fillStyle = layer.color || '#8b5cf6'; ctx.fillRect(0,0,c.width,c.height); }
-      if (layer.type === 'text') {
-        ctx.font = `900 ${layer.size || 64}px Inter, Segoe UI, Arial, sans-serif`;
-        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-        ctx.fillStyle = layer.color || '#fff'; ctx.shadowColor = layer.glow || layer.color || '#8b5cf6'; ctx.shadowBlur = 18;
-        ctx.fillText(layer.text || 'REALRPG', layer.x || c.width/2, layer.y || c.height/2);
-      }
-      if (layer.type === 'image' && layer.img) ctx.drawImage(layer.img, layer.x || 0, layer.y || 0, layer.w || 300, layer.h || 300);
-      ctx.restore();
-    }
-    const sel = state.layers[state.selectedLayer];
-    if (sel && !sel.hidden && (sel.type === 'text' || sel.type === 'image')) {
-      ctx.save(); ctx.strokeStyle = '#8cff2e'; ctx.lineWidth = 2; ctx.setLineDash([8,6]);
-      const x = (sel.x || c.width/2) - (sel.type === 'text' ? 180 : 0);
-      const y = (sel.y || c.height/2) - (sel.type === 'text' ? (sel.size || 64) : 0);
-      const w = sel.type === 'text' ? 360 : (sel.w || 300); const h = sel.type === 'text' ? (sel.size || 64) * 1.35 : (sel.h || 300);
-      ctx.strokeRect(x,y,w,h); ctx.restore();
-    }
-    $('emptyCanvas').classList.toggle('hidden', !!state.bg);
-  }
-
-  function canvasDataUrl() { draw(); return state.canvas.toDataURL('image/png'); }
-  function loadImage(src) { return new Promise((resolve,reject)=>{ const img = new Image(); img.onload=()=>resolve(img); img.onerror=reject; img.src=src; }); }
-  function download(name, href) { const a = document.createElement('a'); a.href = href; a.download = name; a.click(); }
-
-  function renderLayers() {
-    $('layerCount').textContent = String(state.layers.length);
-    const box = $('layerList'); box.innerHTML = '';
-    state.layers.forEach((l,i)=>{
-      const row = document.createElement('div'); row.className = 'layer' + (i === state.selectedLayer ? ' active' : '');
-      row.innerHTML = `<div class="layer-head"><b>${l.label || l.type}</b><span>${Math.round((l.opacity ?? 1)*100)}%</span></div><span>${l.type}</span>`;
-      row.onclick = () => { state.selectedLayer = i; renderLayers(); syncInspector(); draw(); };
-      box.appendChild(row);
-    });
-  }
-
-  function syncInspector() {
-    const l = state.layers[state.selectedLayer];
-    $('layerText').value = l && l.type === 'text' ? (l.text || '') : '';
-    $('layerColor').value = l ? (l.color || '#ffffff') : '#ffffff';
-    $('layerGlow').value = l ? (l.glow || '#8b5cf6') : '#8b5cf6';
-    $('layerOpacity').value = l ? Math.round((l.opacity ?? 1)*100) : 100;
-    $('layerSize').value = l && l.size ? l.size : 64;
-  }
-  function updateSelectedFromInspector() {
-    const l = state.layers[state.selectedLayer]; if (!l) return;
-    if (l.type === 'text') l.text = $('layerText').value || 'REALRPG';
-    l.color = $('layerColor').value; l.glow = $('layerGlow').value; l.opacity = Number($('layerOpacity').value)/100;
-    if (l.type === 'text') l.size = Number($('layerSize').value);
-    renderLayers(); draw();
-  }
-
-  function addText() { pushHistory(); state.layers.push({ type:'text', label:'RealRPG Text', text:'REALRPG', color:'#ffffff', glow:'#8b5cf6', opacity:1, size:64, x:512, y:512 }); state.selectedLayer = state.layers.length-1; renderLayers(); syncInspector(); draw(); }
-  function addColor() { pushHistory(); state.layers.push({ type:'color', label:'Color Overlay', color:'#8b5cf6', opacity:.22 }); state.selectedLayer = state.layers.length-1; renderLayers(); syncInspector(); draw(); }
-  async function addImage(file) { if (!file) return; pushHistory(); const src = await fileToDataUrl(file); const img = await loadImage(src); state.layers.push({ type:'image', label:file.name || 'Image', img, imgSrc:src, opacity:1, x:256, y:256, w:360, h:360 }); state.selectedLayer = state.layers.length-1; renderLayers(); syncInspector(); draw(); }
-  function fileToDataUrl(file) { return new Promise(resolve => { const r = new FileReader(); r.onload = () => resolve(r.result); r.readAsDataURL(file); }); }
-
-  function renderTemplates() {
-    const gender = $('genderFilter').value, comp = $('componentFilter').value;
-    state.filtered = state.catalog.filter(t => (gender === 'all' || t.gender === gender) && (comp === 'all' || t.category === comp || t.component_key === comp));
-    const box = $('templateList'); box.innerHTML = '';
-    state.filtered.forEach((t)=>{
-      const row = document.createElement('div'); row.className = 'template' + (state.template && state.template.id === t.id ? ' active' : '');
-      row.innerHTML = `<div class="template-head"><b>${t.name || t.file_name}</b><span>${t.file_type || ''}</span></div><span>${t.gender || ''} · ${t.category || t.component_key || ''} · drawable ${t.drawable || 0}/${t.texture || 0}</span><small>${t.template_path || t.file_name || ''}</small>`;
-      row.onclick = () => selectTemplate(t);
-      box.appendChild(row);
-    });
-  }
-
-  async function selectTemplate(t) {
-    state.template = t; renderTemplates();
-    $('activeTemplateText').textContent = 'Template: ' + fileLabel(t);
-    $('editorTitle').textContent = 'EDITOR ' + (t.name || t.file_name || 'template');
-    if (!$('originalTxn').value) $('originalTxn').value = t.texture_name || t.name || '';
-    if (!$('outputName').value) $('outputName').value = `realrpg_custom_${(t.name || t.file_name || 'texture').replace(/\.[^.]+$/,'')}.ytd`;
-    const map = componentMap[t.component_key || t.category];
-    if (map) {
-      await post('setComponent', { id: map.id, key: map.key, tex: map.tex, drawable: Number(t.drawable || 0), texture: Number(t.texture || 0), focus: map.focus });
-      await post('focus', { focus: map.focus });
-    }
-  }
-
-  async function loadCatalog(rescan=false) {
-    setStatus(rescan ? 'Template rescan...' : 'Template lista betöltése...');
-    let res = await post(rescan ? 'rescanTemplateCatalog' : 'getTemplateCatalog', {});
-    if (!res.ok) { setStatus(res.error || 'Template lista hiba'); return; }
-
-    state.catalog = res.catalog || [];
-
-    // First open quality-of-life: if the DB catalog is empty, run a real server-side rescan
-    // instead of showing an empty Templates tab and forcing the user to know the console command.
-    if (!rescan && state.catalog.length === 0) {
-      setStatus('Nincs template a DB-ben, automatikus rescan...');
-      const scan = await post('rescanTemplateCatalog', {});
-      if (scan.ok) {
-        res = scan;
-        state.catalog = scan.catalog || [];
-      } else {
-        setStatus(scan.error || 'Template rescan hiba');
-        return;
-      }
-    }
-
-    renderTemplates();
-    const scanned = res.rescan && typeof res.rescan.scanned !== 'undefined' ? ` · scanned ${res.rescan.scanned}, registered ${res.rescan.registered || 0}, skipped ${res.rescan.skipped || 0}` : '';
-    setStatus(`Templates: ${state.catalog.length}${scanned}`);
-  }
-
-  async function extractTexture() {
-    if (!state.template) { setStatus('Válassz template-et.'); return; }
-    setStatus('UV textúra kinyerése...');
-    const res = await post('extractTemplateTexture', { template: activeTemplatePayload() });
-    if (!res.ok) { setStatus(res.error || 'Extract hiba'); return; }
-    const img = await loadImage(res.dataUri || res.imageData || res.pngDataUri);
-    state.bg = img; state.layers = []; state.selectedLayer = -1; state.history = []; state.redo = [];
-    if (!$('originalTxn').value && res.textureName) $('originalTxn').value = res.textureName;
-    draw(); renderLayers(); syncInspector();
-    setStatus('UV textúra betöltve: ' + (res.textureName || 'diffuse'));
-  }
-  async function livePreview() {
-    if (!state.bg) { setStatus('Előbb töltsd be a textúrát.'); return; }
-    const t = activeTemplatePayload();
-    const res = await post('applyLiveTexture', { template: t, imageData: canvasDataUrl(), originalTxd: t.txdName, originalTxn: t.originalTxn || t.textureName });
-    setStatus(res.ok ? 'Live 3D preview frissítve.' : (res.error || 'Live preview hiba'));
-  }
-  async function exportYtd() {
-    if (!state.bg) { setStatus('Előbb töltsd be a textúrát.'); return; }
-    setStatus('Export .YTD...');
-    const res = await post('injectTemplateTexture', { template: activeTemplatePayload(), imageData: canvasDataUrl(), outputName: $('outputName').value || undefined });
-    setStatus(res.ok ? `Export kész: ${res.outputPath || res.outputFile || 'stream'}` : (res.error || 'Export hiba'));
-  }
-  async function status() { const res = await post('bridgeStatus'); setStatus(res.ok ? `Worker OK · bridge=${res.bridgeFound?'OK':'MISSING'} · texconv=${res.texconvFound?'OK':'MISSING'}` : (res.error || 'Worker hiba')); }
-
-  function initCanvasInput() {
-    state.canvas = $('uvCanvas'); state.ctx = state.canvas.getContext('2d'); draw();
-    state.canvas.addEventListener('mousedown', e => { const l = state.layers[state.selectedLayer]; if (!l || l.type === 'color') return; state.dragging = true; state.dragStart = { x:e.offsetX*(state.canvas.width/state.canvas.clientWidth), y:e.offsetY*(state.canvas.height/state.canvas.clientHeight), ox:l.x||0, oy:l.y||0 }; pushHistory(); });
-    window.addEventListener('mousemove', e => { if (!state.dragging) return; const rect = state.canvas.getBoundingClientRect(); const x = (e.clientX-rect.left)*(state.canvas.width/rect.width); const y = (e.clientY-rect.top)*(state.canvas.height/rect.height); const l = state.layers[state.selectedLayer]; if (!l) return; l.x = state.dragStart.ox + (x-state.dragStart.x); l.y = state.dragStart.oy + (y-state.dragStart.y); draw(); });
-    window.addEventListener('mouseup', () => { state.dragging=false; });
-  }
-  function bind() {
-    qsa('.tabs button').forEach(b => b.onclick = () => { qsa('.tabs button').forEach(x=>x.classList.remove('active')); qsa('.tabpage').forEach(x=>x.classList.remove('active')); b.classList.add('active'); $('tab-'+b.dataset.tab).classList.add('active'); });
-    qsa('.tool').forEach(b => b.onclick = () => { qsa('.tool').forEach(x=>x.classList.remove('active')); b.classList.add('active'); });
-    qsa('[data-focus]').forEach(b=>b.onclick=()=>post('focus',{focus:b.dataset.focus}));
-    $('rotLeft').onclick=()=>post('rotate',{delta:-12}); $('rotRight').onclick=()=>post('rotate',{delta:12});
-    $('closeBtn').onclick=()=>post('close',{apply:false,save:false});
-    $('addTextBtn').onclick=addText; $('addColorBtn').onclick=addColor; $('addImageBtn').onclick=()=>$('imageFile').click(); $('imageFile').onchange=e=>addImage(e.target.files[0]);
-    ['layerText','layerColor','layerGlow','layerOpacity','layerSize'].forEach(id=>$(id).addEventListener('input', updateSelectedFromInspector));
-    $('delLayerBtn').onclick=()=>{ if(state.selectedLayer<0)return; pushHistory(); state.layers.splice(state.selectedLayer,1); state.selectedLayer=-1; renderLayers(); syncInspector(); draw(); };
-    $('dupLayerBtn').onclick=()=>{ const l=state.layers[state.selectedLayer]; if(!l)return; pushHistory(); state.layers.push({...l, x:(l.x||0)+30, y:(l.y||0)+30}); state.selectedLayer=state.layers.length-1; renderLayers(); draw(); };
-    $('undoBtn').onclick=()=>{ const s=state.history.pop(); if(!s)return; state.redo.push(JSON.stringify({layers:state.layers.map(l=>({...l,img:undefined,imgSrc:l.imgSrc||null}))})); restoreSnapshot(s); };
-    $('redoBtn').onclick=()=>{ const s=state.redo.pop(); if(!s)return; state.history.push(JSON.stringify({layers:state.layers.map(l=>({...l,img:undefined,imgSrc:l.imgSrc||null}))})); restoreSnapshot(s); };
-    $('genderFilter').onchange=renderTemplates; $('componentFilter').onchange=renderTemplates; $('rescanBtn').onclick=()=>loadCatalog(true);
-    $('extractBtn').onclick=extractTexture; $('livePreviewBtn').onclick=livePreview; $('clearLiveBtn').onclick=async()=>{ await post('clearLiveTextures'); setStatus('Live preview törölve.'); };
-    $('exportYtdBtn').onclick=exportYtd; $('statusBtn').onclick=status;
-    $('downloadPngBtn').onclick=()=>download('realrpg_uv_texture.png', canvasDataUrl()); $('savePngBtn').onclick=$('downloadPngBtn').onclick;
-    $('quickFitBtn').onclick=()=>{ addText(); setStatus('Quick AI Fit placeholder: AI generálás későbbi fázis.'); };
-    window.addEventListener('wheel', e=>{ if(!state.visible)return; post('zoom',{delta:e.deltaY>0?2.2:-2.2}); });
-    window.addEventListener('keydown', e=>{ if(!state.visible)return; if(e.key==='Escape')post('close',{apply:false,save:false}); if(e.key.toLowerCase()==='q')post('rotate',{delta:-10}); if(e.key.toLowerCase()==='e')post('rotate',{delta:10}); });
-  }
-
-  window.addEventListener('message', e => {
-    const d = e.data || {};
-    if (d.action === 'open' || d.action === 'openScreenshot' || d.action === 'refreshLimits') {
-      state.visible = true; $('app').classList.remove('hidden'); state.mode = d.mode || state.mode; $('previewMode').textContent = (d.mode || 'PREVIEW').toUpperCase();
-      if (!state.catalog.length) loadCatalog(false);
-    }
-    if (d.action === 'hide') { $('app').classList.add('hidden'); state.visible=false; }
-  });
-
-  document.addEventListener('DOMContentLoaded', () => { initCanvasInput(); bind(); status(); });
+'use strict';
+const $=id=>document.getElementById(id), $$=s=>[...document.querySelectorAll(s)];
+const post=(name,data={})=>fetch(`https://${GetParentResourceName()}/${name}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)}).then(r=>r.json()).catch(e=>({ok:false,error:String(e)}));
+const componentMap={head:{id:1,key:'mask_1',tex:'mask_2',focus:'head'},accs:{id:7,key:'chain_1',tex:'chain_2',focus:'head'},decl:{id:10,key:'decals_1',tex:'decals_2',focus:'torso'},feet:{id:6,key:'shoes_1',tex:'shoes_2',focus:'feet'},hand:{id:3,key:'arms',tex:'arms_2',focus:'torso'},jbib:{id:11,key:'torso_1',tex:'torso_2',focus:'torso'},lowr:{id:4,key:'pants_1',tex:'pants_2',focus:'legs'},task:{id:5,key:'bags_1',tex:'bags_2',focus:'torso'},uppr:{id:8,key:'tshirt_1',tex:'tshirt_2',focus:'torso'}};
+const state={visible:false,isAdmin:false,openData:{},catalog:[],template:null,layers:[],selected:-1,bg:null,bgSrc:null,canvas:null,ctx:null,drag:false,dragStart:null,history:[],redo:[],components:[],designs:[],orders:[],activeOrderId:null,activeDesignId:null};
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+function toast(msg,type='info'){const n=document.createElement('div');n.className=`toast ${type}`;n.textContent=msg;$('toasts').appendChild(n);setTimeout(()=>n.remove(),3600)}
+function setBridge(text,kind='warn'){$('bridgeStatus').textContent=text;$('workerBadge').textContent=kind==='ok'?'WORKER OK':kind==='bad'?'WORKER HIBA':'WORKER…';$('workerBadge').className=`badge ${kind}`}
+function safeJson(s){try{return JSON.parse(s||'{}')}catch{return {}}}
+function image(src){return new Promise((res,rej)=>{const i=new Image();i.onload=()=>res(i);i.onerror=rej;i.src=src})}
+function canvasData(){return state.canvas.toDataURL('image/png')}
+function layerData(){return state.layers.map(({img,...l})=>({...l,imgSrc:l.imgSrc||null}))}
+function designPayload(){return {version:17,width:state.canvas.width,height:state.canvas.height,template:activeTemplate(),baseImage:state.bgSrc,layers:layerData()}}
+function activeTemplate(){const t=state.template||{},x=safeJson($('templateJson').value),fileType=t.file_type||t.fileType||x.fileType||'',templatePath=t.template_path||t.templatePath||x.templatePath,comp=t.component_key||t.component||t.category||x.component||x.category;const fileName=t.file_name||t.fileName||x.fileName||'',texturePath=t.texture_path||t.ytd_path||t.ytdPath||x.ytdPath||x.templateYtd,txn=$('originalTxn').value||t.texture_name||t.textureName||x.textureName||String(texturePath||'').split(/[\/]/).pop().replace(/\.ytd$/i,'').split('^').pop();const txd=$('originalTxd').value||t.txd_name||t.txdName||x.txdName||x.txd||String(texturePath||'').split(/[\/]/).pop().replace(/\.ytd$/i,'');return {...x,id:t.id||x.id,name:t.name||x.name,fileName,fileType,gender:t.gender||x.gender,component:comp,category:t.category||x.category||comp,drawable:Number(t.drawable??x.drawable??0),texture:Number(t.texture??x.texture??0),templatePath,yddPath:t.yddPath||(fileType==='ydd'?templatePath:null)||x.yddPath,ytdPath:t.ytdPath||texturePath||(fileType==='ytd'?templatePath:null)||x.ytdPath||x.templateYtd,textureName:txn,originalTxn:txn,txdName:txd}}
+function snapshot(){state.history.push(JSON.stringify(layerData()));if(state.history.length>40)state.history.shift();state.redo=[]}
+async function restore(s){const arr=JSON.parse(s||'[]');for(const l of arr){if(l.imgSrc)try{l.img=await image(l.imgSrc)}catch{}}state.layers=arr;state.selected=Math.min(state.selected,state.layers.length-1);renderLayers();syncInspector();draw()}
+function draw(){const c=state.canvas,x=state.ctx;if(!c||!x)return;x.clearRect(0,0,c.width,c.height);x.fillStyle='#fff';x.fillRect(0,0,c.width,c.height);if(state.bg)x.drawImage(state.bg,0,0,c.width,c.height);state.layers.forEach((l,i)=>{if(l.hidden)return;x.save();x.globalAlpha=Number(l.opacity??1);if(l.type==='color'){x.fillStyle=l.color||'#8b5cf6';x.fillRect(0,0,c.width,c.height)}else{x.translate(l.x||c.width/2,l.y||c.height/2);x.rotate((l.rotation||0)*Math.PI/180);if(l.type==='text'){const size=Number(l.size||64);x.font=`900 ${size}px Arial`;x.textAlign='center';x.textBaseline='middle';if(l.glow){x.shadowColor=l.glow;x.shadowBlur=Math.max(0,size*.18)}x.fillStyle=l.color||'#fff';x.fillText(l.text||'REALRPG',0,0)}else if(l.type==='image'&&l.img){const w=Number(l.size||260),r=l.img.height/l.img.width;x.drawImage(l.img,-w/2,-w*r/2,w,w*r)}if(i===state.selected){x.shadowBlur=0;x.strokeStyle='#78ef65';x.lineWidth=3;x.setLineDash([12,8]);const w=l.type==='text'?Math.max(140,x.measureText(l.text||'REALRPG').width):Number(l.size||260),h=l.type==='text'?Number(l.size||64)*1.35:Number(l.size||260)*(l.img?l.img.height/l.img.width:1);x.strokeRect(-w/2-12,-h/2-12,w+24,h+24)}}x.restore()});$('emptyCanvas').classList.toggle('hidden',!!state.bg)}
+function renderLayers(){const box=$('layerList');box.innerHTML='';state.layers.slice().reverse().forEach((l,ri)=>{const i=state.layers.length-1-ri,n=document.createElement('div');n.className='layer'+(i===state.selected?' active':'');n.innerHTML=`<div class="row"><b>${esc(l.name||l.type)}</b><small>${l.hidden?'REJTETT':l.type.toUpperCase()}</small></div><p>${l.type==='text'?esc(l.text):l.type==='image'?'Feltöltött kép':'Teljes felület színezése'}</p>`;n.onclick=()=>{state.selected=i;renderLayers();syncInspector();draw()};n.ondblclick=()=>{l.hidden=!l.hidden;renderLayers();draw()};box.appendChild(n)});$('layerCount').textContent=`${state.layers.length} elem`}
+function syncInspector(){const l=state.layers[state.selected],type=l?.type||null,label={text:'Szöveg',image:'Kép',color:'Színréteg'}[type]||'Nincs kijelölés';$('selectedType').textContent=label;['layerText','layerColor','layerGlow','layerOpacity','layerSize','layerRotation'].forEach(id=>$(id).disabled=!l);$('layerTextField').classList.toggle('hidden',type!=='text');$('layerColorField').classList.toggle('hidden',!['text','color'].includes(type));$('layerGlowField').classList.toggle('hidden',type!=='text');$('imageToolsField').classList.toggle('hidden',type!=='image');$('layerSizeField').classList.toggle('hidden',type==='color'||!type);$('layerRotationField').classList.toggle('hidden',type==='color'||!type);if(!l)return;$('layerText').value=l.text||'';$('layerColor').value=l.color||'#ffffff';$('layerGlow').value=l.glow||'#8b5cf6';$('layerOpacity').value=Math.round((l.opacity??1)*100);$('layerSize').value=l.size||64;$('layerRotation').value=l.rotation||0;$('opacityText').textContent=`${$('layerOpacity').value}%`;$('sizeText').textContent=$('layerSize').value;$('rotationText').textContent=`${$('layerRotation').value}°`}
+function inspectorUpdate(){const l=state.layers[state.selected];if(!l)return;if(l.type==='text'){l.text=$('layerText').value;l.color=$('layerColor').value;l.glow=$('layerGlow').value}else if(l.type==='color'){l.color=$('layerColor').value}l.opacity=Number($('layerOpacity').value)/100;if(l.type!=='color'){l.size=Number($('layerSize').value);l.rotation=Number($('layerRotation').value)}$('opacityText').textContent=`${$('layerOpacity').value}%`;$('sizeText').textContent=$('layerSize').value;$('rotationText').textContent=`${$('layerRotation').value}°`;renderLayers();draw()}
+function addLayer(type,extra={}){snapshot();const l={type,name:type==='text'?'Szöveg':type==='image'?'Kép':'Színréteg',x:512,y:512,size:type==='text'?74:300,rotation:0,opacity:type==='color'?.25:1,color:type==='color'?'#8b5cf6':'#ffffff',glow:'#8b5cf6',text:'REALRPG',...extra};state.layers.push(l);state.selected=state.layers.length-1;renderLayers();syncInspector();draw()}
+async function addImage(file){if(!file)return;if(file.size>6*1024*1024){toast('A kép legfeljebb 6 MB lehet.','error');return}try{const src=await new Promise((r,rej)=>{const fr=new FileReader();fr.onload=()=>r(fr.result);fr.onerror=rej;fr.readAsDataURL(file)}),img=await image(src);const fit=Math.min(420,Math.max(140,img.width>img.height?360:300));addLayer('image',{img,imgSrc:src,name:file.name,size:fit})}catch{toast('A képet nem sikerült betölteni.','error')}finally{$('imageFile').value=''}}
+async function removeDarkBackground(){const l=state.layers[state.selected];if(!l||l.type!=='image'||!l.img)return;const c=document.createElement('canvas'),x=c.getContext('2d',{willReadFrequently:true});c.width=l.img.naturalWidth||l.img.width;c.height=l.img.naturalHeight||l.img.height;x.drawImage(l.img,0,0,c.width,c.height);const d=x.getImageData(0,0,c.width,c.height),p=d.data;for(let i=0;i<p.length;i+=4){const max=Math.max(p[i],p[i+1],p[i+2]),min=Math.min(p[i],p[i+1],p[i+2]),lum=.2126*p[i]+.7152*p[i+1]+.0722*p[i+2],sat=max-min;if(lum<38&&sat<42)p[i+3]=0;else if(lum<92&&sat<54)p[i+3]=Math.round(p[i+3]*Math.max(0,Math.min(1,(lum-34)/58)))}x.putImageData(d,0,0);snapshot();l.imgSrc=c.toDataURL('image/png');l.img=await image(l.imgSrc);l.name=String(l.name||'Kép').replace(/ \(háttér nélkül\)$/,'')+' (háttér nélkül)';renderLayers();draw();toast('A fekete háttér eltávolítva.','success')}
+function section(name){name=String(name||'studio').toLowerCase();if(name==='saved')name='wardrobe';$$('.nav[data-section]').forEach(n=>n.classList.toggle('active',n.dataset.section===name));$$('.section').forEach(n=>n.classList.remove('active'));const el=$(`section-${name}`);if(el)el.classList.add('active');if(name==='wardrobe')loadDesigns();if(name==='orders')loadOrders();if(name==='admin')loadAdmin()}
+function renderComponentSelect(){const s=$('componentSelect');s.innerHTML='';state.components.forEach((c,i)=>{const o=document.createElement('option');o.value=i;o.textContent=c.label;s.appendChild(o)});updateComponentControls()}
+function updateComponentControls(){const c=state.components[Number($('componentSelect').value)||0];if(!c)return;$('drawableRange').max=c.maxDrawable||0;$('drawableRange').value=c.drawable||0;$('drawableValue').textContent=c.drawable||0;$('textureRange').max=c.maxTexture||0;$('textureRange').value=c.texture||0;$('textureValue').textContent=c.texture||0}
+async function applyComponent(){const c=state.components[Number($('componentSelect').value)||0];if(!c)return;c.drawable=Number($('drawableRange').value);c.texture=Number($('textureRange').value);const r=await post('setComponent',{...c});if(r.ok){c.maxTexture=r.maxTexture||0;$('textureRange').max=c.maxTexture;$('drawableValue').textContent=c.drawable;$('textureValue').textContent=c.texture}}
+function templateKey(t){return `${t.gender||''}/${t.category||t.component_key||''}/${t.file_name||t.name||''}`}
+function renderTemplates(){const g=$('genderFilter').value,c=$('componentFilter').value,q=$('templateSearch').value.toLowerCase();const rows=state.catalog.filter(t=>(g==='all'||t.gender===g)&&(c==='all'||t.category===c||t.component_key===c)&&(!q||templateKey(t).toLowerCase().includes(q)));$('templateCount').textContent=`${rows.length} sablon`;$('templateList').innerHTML='';rows.forEach(t=>{const n=document.createElement('div');n.className='template'+(state.template&&state.template.id===t.id?' active':'');n.innerHTML=`<div class="row"><b>${esc(t.name||t.file_name)}</b><small>${esc((t.file_type||'').toUpperCase())}</small></div><p>${esc(t.template_path||t.file_name||'')}</p><div class="tags"><span class="tag">${esc(t.gender)}</span><span class="tag">${esc(t.category||t.component_key)}</span><span class="tag">DRAW ${Number(t.drawable||0)}</span></div>`;n.onclick=()=>selectTemplate(t);$('templateList').appendChild(n)})}
+async function selectTemplate(t){if(t.file_type==='ydd'){const y=state.catalog.find(x=>x.file_type==='ytd'&&x.gender===t.gender&&(x.category||x.component_key)===(t.category||t.component_key)&&Number(x.drawable||0)===Number(t.drawable||0));if(y)t=y}state.template=t;renderTemplates();$('activeTemplateText').textContent=`Template: ${templateKey(t)}`;$('activeGarment').textContent=t.name||t.file_name||'Sablon';$('originalTxn').value=t.texture_name||String(t.texture_path||t.ytd_path||t.file_name||'').split(/[\/]/).pop().replace(/\.ytd$/i,'').split('^').pop();$('originalTxd').value=String(t.texture_path||t.ytd_path||'').split(/[\/]/).pop().replace(/\.ytd$/i,'');const normalized=activeTemplate();$('outputName').value='';$('outputName').placeholder='Automatikus következő szabad B–Z slot';state.activeOrderId=null;state.activeDesignId=null;const m=componentMap[t.component_key||t.category];await post('loadTemplateForPreview',{...normalized,preview_type:t.preview_type||t.previewType,componentId:m?.id,category:t.component_key||t.category});if(m){const r=await post('setComponent',{...m,drawable:Number(t.drawable||0),texture:Number(t.texture||0)});if(!r.ok)toast('A sablon 3D komponense nem alkalmazható ezen a ped modellen.','error');await post('focus',{focus:m.focus})}}
+async function loadCatalog(rescan=false){setBridge(rescan?'Sablonok újraolvasása…':'Sablonok betöltése…');let r=await post(rescan?'rescanTemplateCatalog':'getTemplateCatalog');if(!r.ok){setBridge(r.error||'Template hiba','bad');return}state.catalog=r.catalog||[];if(!rescan&&!state.catalog.length){r=await post('rescanTemplateCatalog');if(r.ok)state.catalog=r.catalog||[]}const comps=[...new Set(state.catalog.map(t=>t.category||t.component_key).filter(Boolean))].sort();$('componentFilter').innerHTML='<option value="all">Minden rész</option>'+comps.map(x=>`<option value="${esc(x)}">${esc(x.toUpperCase())}</option>`).join('');renderTemplates();setBridge(`${state.catalog.length} sablon elérhető`,'ok')}
+async function extract(){if(!state.template){toast('Előbb válassz sablont.','error');section('templates');return}setBridge('Diffuse textúra kinyerése…');const r=await post('extractTemplateTexture',{template:activeTemplate()});if(!r.ok){setBridge(r.error||'Extract hiba','bad');toast(r.error||'Nem sikerült kinyerni a textúrát.','error');return}const src=r.dataUri||r.imageData||r.pngDataUri;state.bg=await image(src);state.bgSrc=src;state.layers=[];state.selected=-1;state.history=[];state.redo=[];if(r.textureName)$('originalTxn').value=r.textureName;draw();renderLayers();syncInspector();section('studio');setBridge('Textúra betöltve','ok');toast('Eredeti UV textúra betöltve.','success')}
+async function livePreview(){if(!state.bg){toast('Nincs betöltött textúra.','error');return}const t=activeTemplate(),r=await post('applyLiveTexture',{template:t,imageData:canvasData(),originalTxd:t.txdName,originalTxn:t.originalTxn});if(r.ok){toast('Live textúra frissítve.','success');setBridge('Live preview aktív','ok')}else{toast(r.error==='original_texture_missing'?'Add meg az eredeti TXD és texture nevét.':(r.error||'Live preview hiba'),'error');setBridge(r.error||'Live preview hiba','bad')}}
+async function exportYtd(){if(!state.bg){toast('Nincs exportálható textúra.','error');return}setBridge('YTD generálása…');const r=await post('injectTemplateTexture',{template:activeTemplate(),imageData:canvasData(),outputName:$('outputName').value||undefined,orderId:state.activeOrderId,designId:state.activeDesignId});if(r.ok){const slot=r.slotLetter?` · slot ${String(r.slotLetter).toUpperCase()} / texture ${r.textureIndex}`:'';toast(`YTD elkészült: ${r.outputFile||r.outputPath||'stream'}${slot}`,'success');setBridge(`YTD export kész${slot}`,'ok');if(r.outputFile)$('outputName').value=r.outputFile}else{toast(r.error||'YTD export hiba','error');setBridge(r.error||'YTD export hiba','bad')}}
+async function saveDesign(){if(!state.bg){toast('Előbb tölts be egy sablont.','error');return}const r=await post('saveDesign',{name:$('designName').value||'RealRPG Design',canvas:designPayload(),image:canvasData()});if(r.ok){toast(`Dizájn elmentve (#${r.id}).`,'success');loadDesigns()}else toast(r.error||'Mentési hiba','error')}
+async function orderCurrent(){if(!state.bg){toast('Nincs megrendelhető terv.','error');return}const r=await post('orderItem',{name:$('designName').value||'RealRPG Outfit',itemType:'outfit',canvas:designPayload(),image:canvasData()});if(r.ok){toast(r.pending?'Rendelés jóváhagyásra elküldve.':'Ruházati item elkészült.','success');loadOrders()}else toast(r.error||'Rendelési hiba','error')}
+async function loadDesigns(){const r=await post('loadMyDesigns');state.designs=r.designs||[];renderDesigns()}
+function renderDesigns(){const q=$('designSearch').value.toLowerCase(),box=$('designList');box.innerHTML='';state.designs.filter(d=>!q||String(d.name).toLowerCase().includes(q)).forEach(d=>{const n=document.createElement('div');n.className='card';n.innerHTML=`<div class="row"><b>${esc(d.name)}</b><small>#${d.id}</small></div><p>${esc(d.gender)} · ${esc(d.preview_type)} · ${esc(d.created_at||'')}</p><div class="card-actions"><button data-a="edit">Szerkesztés</button><button data-a="wear">Felvétel</button><button data-a="order">Megrendelés</button><button data-a="copy">Másolat</button><button data-a="rename">Átnevezés</button><button data-a="delete" class="danger-soft">Törlés</button></div>`;n.querySelectorAll('button').forEach(b=>b.onclick=()=>designAction(b.dataset.a,d));box.appendChild(n)})}
+async function loadSavedCanvas(id,admin=false){const r=await post(admin?'adminLoadDesign':'applySavedDesign',{id});if(!r.ok){toast('A terv nem tölthető be.','error');return}state.activeDesignId=Number(r.id||id);state.activeOrderId=null;$('outputName').value='';const c=r.canvas||{};state.layers=c.layers||[];for(const l of state.layers){if(l.imgSrc)try{l.img=await image(l.imgSrc)}catch{}}if(c.baseImage){state.bgSrc=c.baseImage;state.bg=await image(c.baseImage)}else if(r.image){state.bgSrc=r.image;state.bg=await image(r.image);state.layers=[]}if(c.template){state.template=c.template;$('originalTxn').value=c.template.originalTxn||c.template.textureName||'';$('originalTxd').value=c.template.txdName||''}state.selected=-1;draw();renderLayers();syncInspector();section('studio');toast('Terv betöltve.','success')}
+async function designAction(a,d){if(a==='edit')return loadSavedCanvas(d.id);if(a==='wear'){const r=await post('applySavedDesignToPlayer',{id:d.id});return toast(r.ok?'Ruha felvéve.':'Nem sikerült. ',r.ok?'success':'error')}if(a==='order'){const r=await post('orderSavedDesignItem',{id:d.id,itemType:'outfit'});toast(r.ok?'Rendelés létrehozva.':(r.error||'Hiba'),r.ok?'success':'error');return}if(a==='copy'){const r=await post('duplicateDesign',{id:d.id});toast(r.ok?'Másolat elkészült.':(r.error||'Hiba'),r.ok?'success':'error');return loadDesigns()}if(a==='rename'){const name=prompt('Új név:',d.name);if(name){const r=await post('renameDesign',{id:d.id,name});toast(r.ok?'Átnevezve.':(r.error||'Hiba'),r.ok?'success':'error');loadDesigns()}return}if(a==='delete'&&confirm(`Biztosan törlöd: ${d.name}?`)){const r=await post('deleteDesign',{id:d.id});toast(r.ok?'Törölve.':(r.error||'Hiba'),r.ok?'success':'error');loadDesigns()}}
+async function loadOrders(){const r=await post('loadMyOrders');state.orders=r.orders||[];const box=$('orderList');box.innerHTML='';state.orders.forEach(o=>{const n=document.createElement('div');n.className='card';n.innerHTML=`<div class="row"><b>${esc(o.name)}</b><span class="tag ${esc(o.status)}">${esc(o.status)}</span></div><p>#${o.id} · ${esc(o.type)} · ${Number(o.price||0)} · ${esc(o.created_at||'')}</p>${o.note?`<p>${esc(o.note)}</p>`:''}<div class="card-actions">${o.status==='pending'?'<button data-cancel>Lemondás</button>':''}</div>`;const b=n.querySelector('[data-cancel]');if(b)b.onclick=async()=>{const r=await post('cancelOrder',{id:o.id});toast(r.ok?'Rendelés lemondva.':(r.error||'Hiba'),r.ok?'success':'error');loadOrders()};box.appendChild(n)})}
+async function loadAdmin(){if(!state.isAdmin)return;const [o,d]=await Promise.all([post('adminListOrders',{status:$('adminStatus').value}),post('adminListDesigns')]);renderAdminOrders(o.orders||[]);renderAdminDesigns(d.designs||[])}
+function renderAdminOrders(rows){const box=$('adminOrderList');box.innerHTML='';rows.forEach(o=>{const n=document.createElement('div');n.className='card';n.innerHTML=`<div class="row"><b>${esc(o.name)}</b><span class="tag ${esc(o.status)}">${esc(o.status)}</span></div><p>#${o.id} · ${esc(o.identifier)} · ${Number(o.price||0)}</p><div class="card-actions"><button data-preview>Előnézet</button><button data-s="approved">Jóváhagy</button><button data-s="ready">Kész</button><button data-deliver>Kiadás</button><button data-s="rejected" class="danger-soft">Elutasít</button></div>`;n.querySelector('[data-preview]').onclick=async()=>{const r=await post('adminLoadOrder',{id:o.id});if(!r.ok)return toast('A rendelés nem tölthető be.','error');state.activeOrderId=Number(r.id||o.id);state.activeDesignId=Number(r.designId||r.design_id||0)||null;$('outputName').value='';const c=r.canvas||{};state.layers=c.layers||[];for(const l of state.layers){if(l.imgSrc)try{l.img=await image(l.imgSrc)}catch{}}if(c.baseImage){state.bgSrc=c.baseImage;state.bg=await image(c.baseImage)}else if(r.image){state.bgSrc=r.image;state.bg=await image(r.image);state.layers=[]}if(c.template){state.template=c.template;$('originalTxn').value=c.template.originalTxn||c.template.textureName||'';$('originalTxd').value=c.template.txdName||''}state.selected=-1;$('designName').value=r.name||o.name;draw();renderLayers();syncInspector();section('studio');toast('Rendelés betöltve ellenőrzésre.','success')};n.querySelectorAll('[data-s]').forEach(b=>b.onclick=async()=>{const note=b.dataset.s==='rejected'?(prompt('Elutasítás oka:')||''):'';const r=await post('adminSetOrderStatus',{id:o.id,status:b.dataset.s,note});toast(r.ok?'Státusz frissítve.':(r.error||'Hiba'),r.ok?'success':'error');loadAdmin()});n.querySelector('[data-deliver]').onclick=async()=>{const r=await post('adminDeliverOrder',{id:o.id});toast(r.ok?'Item kiadva.':(r.error||'Hiba'),r.ok?'success':'error');loadAdmin()};box.appendChild(n)})}
+function renderAdminDesigns(rows){const box=$('adminDesignList');box.innerHTML='';rows.forEach(d=>{const n=document.createElement('div');n.className='card';n.innerHTML=`<div class="row"><b>${esc(d.name)}</b><small>#${d.id}</small></div><p>${esc(d.identifier)} · ${esc(d.gender)} · ${esc(d.created_at||'')}</p><div class="card-actions"><button data-load>Megnyitás</button><button data-give>Item magamnak</button></div>`;n.querySelector('[data-load]').onclick=()=>loadSavedCanvas(d.id,true);n.querySelector('[data-give]').onclick=async()=>{const r=await post('adminGiveDesignItem',{id:d.id});toast(r.ok?'Item kiadva.':(r.error||'Hiba'),r.ok?'success':'error')};box.appendChild(n)})}
+async function status(){const [b,d]=await Promise.all([post('bridgeStatus'),post('getDiagnostics')]);if(b.ok)setBridge(`Bridge OK · ${b.bridgeFound?'converter OK':'converter hiányzik'} · ${b.texconvFound?'texconv OK':'texconv hiányzik'}`,b.bridgeFound&&b.texconvFound?'ok':'warn');else setBridge(b.error||'Worker nem elérhető','bad');$('diagnostics').textContent=JSON.stringify({bridge:b,client:d},null,2)}
+function download(name,url){const a=document.createElement('a');a.download=name;a.href=url;a.click()}
+function bind(){$$('.nav[data-section]').forEach(n=>n.onclick=()=>section(n.dataset.section));$$('[data-focus]').forEach(b=>b.onclick=()=>{$$('[data-focus]').forEach(x=>x.classList.remove('active'));b.classList.add('active');post('focus',{focus:b.dataset.focus})});$('rotLeft').onclick=()=>post('rotate',{delta:-12});$('rotRight').onclick=()=>post('rotate',{delta:12});$('closeBtn').onclick=()=>post('close',{apply:false,save:false});$('applyClose').onclick=()=>post('close',{apply:true,save:true});$('saveDesignTop').onclick=saveDesign;$('orderTop').onclick=orderCurrent;$('addTextBtn').onclick=()=>addLayer('text');$('addColorBtn').onclick=()=>addLayer('color');$('addImageBtn').onclick=()=>$('imageFile').click();$('imageFile').onchange=e=>addImage(e.target.files[0]);$('removeDarkBgBtn').onclick=removeDarkBackground;['layerText','layerColor','layerGlow','layerOpacity','layerSize','layerRotation'].forEach(id=>$(id).oninput=inspectorUpdate);$('dupLayerBtn').onclick=()=>{const l=state.layers[state.selected];if(!l)return;snapshot();state.layers.push({...l,x:(l.x||512)+30,y:(l.y||512)+30});state.selected=state.layers.length-1;renderLayers();draw()};$('delLayerBtn').onclick=()=>{if(state.selected<0)return;snapshot();state.layers.splice(state.selected,1);state.selected=-1;renderLayers();syncInspector();draw()};$('layerUp').onclick=()=>{const i=state.selected;if(i<0||i===state.layers.length-1)return;snapshot();[state.layers[i],state.layers[i+1]]=[state.layers[i+1],state.layers[i]];state.selected++;renderLayers();draw()};$('layerDown').onclick=()=>{const i=state.selected;if(i<=0)return;snapshot();[state.layers[i],state.layers[i-1]]=[state.layers[i-1],state.layers[i]];state.selected--;renderLayers();draw()};$('undoBtn').onclick=()=>{const s=state.history.pop();if(!s)return;state.redo.push(JSON.stringify(layerData()));restore(s)};$('redoBtn').onclick=()=>{const s=state.redo.pop();if(!s)return;state.history.push(JSON.stringify(layerData()));restore(s)};$('goTemplates').onclick=()=>section('templates');$('rescanBtn').onclick=()=>loadCatalog(true);$('genderFilter').onchange=renderTemplates;$('componentFilter').onchange=renderTemplates;$('templateSearch').oninput=renderTemplates;$('extractBtn').onclick=extract;$('livePreviewBtn').onclick=livePreview;$('clearLiveBtn').onclick=async()=>{await post('clearLiveTextures');toast('Live preview törölve.','info')};$('downloadPngBtn').onclick=()=>download('realrpg_texture.png',canvasData());$('exportYtdBtn').onclick=exportYtd;$('statusBtn').onclick=status;$('refreshDesigns').onclick=loadDesigns;$('designSearch').oninput=renderDesigns;$('refreshOrders').onclick=loadOrders;$('refreshAdmin').onclick=loadAdmin;$('adminStatus').onchange=loadAdmin;$('openForPlayer').onclick=async()=>{const r=await post('adminOpenForPlayer',{target:Number($('adminTarget').value)});toast(r.ok?'Designer megnyitva.':(r.error||'Hiba'),r.ok?'success':'error')};$$('[data-admin-tab]').forEach(b=>b.onclick=()=>{$$('[data-admin-tab]').forEach(x=>x.classList.remove('active'));b.classList.add('active');$('adminOrderList').classList.toggle('hidden',b.dataset.adminTab!=='orders');$('adminDesignList').classList.toggle('hidden',b.dataset.adminTab!=='designs')});$('captureBtn').onclick=async()=>{const r=await post('captureImage',{name:$('designName').value,category:state.template?.category,drawable:state.template?.drawable,texture:state.template?.texture});toast(r.ok?'Előnézeti kép elkészült.':(r.error||'Hiba'),r.ok?'success':'error')};$('componentSelect').onchange=updateComponentControls;$('drawableRange').oninput=()=>{$('drawableValue').textContent=$('drawableRange').value};$('textureRange').oninput=()=>{$('textureValue').textContent=$('textureRange').value};$('drawableRange').onchange=applyComponent;$('textureRange').onchange=applyComponent;window.addEventListener('keydown',e=>{if(!state.visible)return;if(e.key==='Escape')post('close',{apply:false,save:false});if(e.key.toLowerCase()==='q')post('rotate',{delta:-8});if(e.key.toLowerCase()==='e')post('rotate',{delta:8});if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='z')$('undoBtn').click()});window.addEventListener('wheel',e=>{if(state.visible&&e.target.closest('.preview'))post('zoom',{delta:e.deltaY>0?2.2:-2.2})},{passive:true})}
+function canvasEvents(){state.canvas=$('uvCanvas');state.ctx=state.canvas.getContext('2d');draw();state.canvas.onmousedown=e=>{const l=state.layers[state.selected];if(!l||l.type==='color')return;const r=state.canvas.getBoundingClientRect(),x=(e.clientX-r.left)*state.canvas.width/r.width,y=(e.clientY-r.top)*state.canvas.height/r.height;snapshot();state.drag=true;state.dragStart={x,y,ox:l.x||512,oy:l.y||512}};window.addEventListener('mousemove',e=>{if(!state.drag)return;const r=state.canvas.getBoundingClientRect(),x=(e.clientX-r.left)*state.canvas.width/r.width,y=(e.clientY-r.top)*state.canvas.height/r.height,l=state.layers[state.selected];if(!l)return;l.x=state.dragStart.ox+x-state.dragStart.x;l.y=state.dragStart.oy+y-state.dragStart.y;draw()});window.addEventListener('mouseup',()=>state.drag=false)}
+window.addEventListener('message',e=>{const d=e.data||{};if(['open','openScreenshot','refreshLimits'].includes(d.action)){state.visible=true;$('app').classList.remove('hidden');state.openData={...state.openData,...d};state.components=d.components||state.components;$('playerName').textContent=d.playerName||'Játékos';$('currencyLabel').textContent=`${d.realCoin?.label||'$'} · Mentés: ${d.prices?.SaveDesign||0}`;$('previewMode').textContent=(d.mode||'PED').toUpperCase();renderComponentSelect();if(!state.catalog.length)loadCatalog();section('studio')}if(d.action==='hide'){$('app').classList.add('hidden');state.visible=false}if(d.action==='adminState'){state.isAdmin=!!d.isAdmin;$$('.admin-only').forEach(x=>x.classList.toggle('hidden',!state.isAdmin))}if(d.action==='forceSection')section(d.section)});
+document.addEventListener('DOMContentLoaded',()=>{canvasEvents();bind();status()});
 })();

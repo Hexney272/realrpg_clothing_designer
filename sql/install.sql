@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS `realrpg_clothing_orders` (
   `reviewed_by` varchar(80) DEFAULT NULL,
   `reviewed_at` datetime DEFAULT NULL,
   `note` varchar(255) DEFAULT NULL,
+  `item_delivered` tinyint(1) NOT NULL DEFAULT 0,
   `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
   PRIMARY KEY (`id`),
   KEY `identifier` (`identifier`),
@@ -71,7 +72,7 @@ CREATE TABLE IF NOT EXISTS `realrpg_clothing_templates` (
   `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
   `updated_at` datetime DEFAULT NULL,
   PRIMARY KEY (`id`),
-  UNIQUE KEY `file_name` (`file_name`)
+  UNIQUE KEY `template_identity` (`gender`,`category`,`file_name`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 CREATE TABLE IF NOT EXISTS `realrpg_clothing_access` (

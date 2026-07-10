@@ -3,18 +3,10 @@ local ESX = exports['es_extended']:getSharedObject()
 local uiOpen, screenshotOpen, cam, previewPed, previewObject = false, false, nil, nil, nil
 local currentFov, currentFocus = Config.Focus[Config.Studio.defaultFocus].fov, Config.Studio.defaultFocus
 local oldSkin, originalCoords, currentShopCoords = nil, nil, nil
-local previewState = { skin = {}, components = {}, props = {}, canvas = {}, previewType = 'hoodie', mode = 'ped_fallback' }
-
--- BUGFIX (V14): Config.RPC.publicOpenEvent/realrpgOpenEvent were declared but the event
--- names were hardcoded everywhere instead of reading them from config. Defined here (top
--- of file, before any usage below) so both the RPC-gated event and the legacy direct-open
--- alias are registered using the configured names, letting server owners actually rename
--- them via config as the docs imply.
-local rpcPublicOpenEvent = (Config.RPC and Config.RPC.publicOpenEvent) or 'realrpg_clothing_designer:client:openClothingDesigner'
-local rpcLegacyOpenEvent = (Config.RPC and Config.RPC.realrpgOpenEvent) or 'realrpg_clothing_designer:open'
+local previewState = { skin = {}, components = {}, props = {}, canvas = {}, previewType = 'hoodie', mode = 'ped_preview' }
 
 local function dbg(...)
-    if Config.Debug then print('[realrpg_clothing_designer:v10]', ...) end
+    if Config.Debug then print('[realrpg_clothing_designer:v17.3]', ...) end
 end
 
 local function notify(msg, typ)
@@ -109,39 +101,13 @@ local function importSkinToPed(ped, skin)
     end
 end
 
--- BUGFIX (live report): getSkin()/applySkinToPlayer() only had real integrations for
--- 'fivem-appearance' and 'illenium-appearance'. Every other Config.Appearance.system
--- value (including the default 'esx_skin' AND custom ones like 'rcore_clothing') fell
--- into an "else" branch that blindly fired 'skinchanger:getSkin' / 'skinchanger:loadSkin'
--- + 'esx_skin:save'. If the server does not run esx_skin/skinchanger (e.g. it uses
--- rcore_clothing instead), NOTHING listens to those events, so:
---   - getSkin() never called its callback -> oldSkin stayed nil forever
---   - applySkinToPlayer() silently did nothing visually on the real player ped, and
---     esx_skin:save() wrote to a `users.skin` column rcore_clothing doesn't read, so the
---     change did not persist and could be overwritten next time rcore reapplied its own
---     saved skin (explains "a ruha nem jelenik meg / nem marad meg" reports).
--- Fix: only use the skinchanger event path when we can actually detect a running
--- skinchanger-compatible resource (esx_skin or the legacy 'skinchanger' resource).
--- For everything else (including rcore_clothing and any unknown/custom system), fall
--- back to directly manipulating the ped components via natives (exportSkinFromPed /
--- importSkinToPed), which always works regardless of which appearance script is
--- installed, since GTA ped components are native and framework-agnostic.
-local function hasSkinchangerCompat()
-    return GetResourceState('esx_skin') == 'started' or GetResourceState('skinchanger') == 'started'
-end
-
 local function getSkin(cb)
     if Config.Appearance.system == 'fivem-appearance' and GetResourceState('fivem-appearance') == 'started' then
         cb(exports['fivem-appearance']:getPedAppearance(PlayerPedId()))
     elseif Config.Appearance.system == 'illenium-appearance' and GetResourceState('illenium-appearance') == 'started' then
         cb(exports['illenium-appearance']:getPedAppearance(PlayerPedId()))
-    elseif Config.Appearance.system == 'esx_skin' and hasSkinchangerCompat() then
-        TriggerEvent('skinchanger:getSkin', function(skin) cb(skin or exportSkinFromPed(PlayerPedId())) end)
     else
-        -- Covers rcore_clothing and any other/unrecognized appearance system: read the
-        -- live ped components directly via natives instead of relying on an event that
-        -- nothing may be listening to.
-        cb(exportSkinFromPed(PlayerPedId()))
+        TriggerEvent('skinchanger:getSkin', function(skin) cb(skin or exportSkinFromPed(PlayerPedId())) end)
     end
 end
 
@@ -153,30 +119,9 @@ local function applySkinToPlayer(skin, save)
     elseif Config.Appearance.system == 'illenium-appearance' and GetResourceState('illenium-appearance') == 'started' then
         exports['illenium-appearance']:setPedAppearance(PlayerPedId(), skin)
         if save then TriggerServerEvent('realrpg_clothing_designer:saveAppearanceSkin', skin) end
-    elseif Config.Appearance.system == 'esx_skin' and hasSkinchangerCompat() then
+    else
         TriggerEvent('skinchanger:loadSkin', skin)
         if save then TriggerServerEvent('esx_skin:save', skin) end
-    else
-        -- rcore_clothing / unknown system fallback: apply directly via natives so the
-        -- change is ALWAYS visible on the real player ped, regardless of which
-        -- appearance script (if any) is installed on the server.
-        importSkinToPed(PlayerPedId(), skin)
-        if save then
-            -- Persist through our own storage as a best-effort fallback so at least our
-            -- own resource remembers it (used by getSkin:server / applyMetadataOutfit).
-            TriggerServerEvent('realrpg_clothing_designer:saveAppearanceSkin', skin)
-            -- Best-effort notice to rcore_clothing (or any other resource) that the ped's
-            -- components changed, in case it wants to resync its own cached copy. This is
-            -- guarded: if rcore_clothing isn't running or doesn't expose this export, it
-            -- is silently ignored instead of erroring the whole apply flow.
-            if GetResourceState('rcore_clothing') == 'started' then
-                pcall(function()
-                    if exports['rcore_clothing'] and exports['rcore_clothing'].refreshSkin then
-                        exports['rcore_clothing']:refreshSkin(PlayerPedId())
-                    end
-                end)
-            end
-        end
     end
 end
 
@@ -208,17 +153,38 @@ local function getSpawnCoords()
     local playerPed = PlayerPedId()
     local pcoords = GetEntityCoords(playerPed)
     local forward = GetEntityForwardVector(playerPed)
-    return pcoords + forward * Config.Studio.spawnDistance, GetEntityHeading(playerPed) + 180.0
+    local distance = tonumber(Config.Studio.spawnDistance) or 2.65
+    return pcoords + forward * distance, GetEntityHeading(playerPed) + 180.0
 end
 
 local function createPreviewPed()
     local coords, heading = getSpawnCoords()
     local hash = loadModel(getPreviewPedModel())
-    if not hash then return nil end
-    local ped = CreatePed(4, hash, coords.x, coords.y, coords.z - 1.0, heading, false, false)
+    if not hash then
+        dbg('Preview model could not be loaded:', getPreviewPedModel())
+        return nil
+    end
+
+    -- Do not subtract one metre from Z. That buried the mannequin on many maps,
+    -- which made the preview window look completely black.
+    local ped = CreatePed(4, hash, coords.x, coords.y, coords.z + (tonumber(Config.Studio.previewGroundOffset) or 0.0), heading, false, false)
     SetModelAsNoLongerNeeded(hash)
+    if not ped or ped == 0 or not DoesEntityExist(ped) then
+        dbg('CreatePed failed for preview model')
+        return nil
+    end
+
     SetEntityAsMissionEntity(ped, true, true)
+    SetEntityCollision(ped, true, true)
+    SetEntityCoordsNoOffset(ped, coords.x, coords.y, coords.z + (tonumber(Config.Studio.previewGroundOffset) or 0.0), false, false, false)
+    PlaceEntityOnGroundProperly(ped)
+    SetEntityHeading(ped, heading)
+    SetEntityVisible(ped, true, false)
+    ResetEntityAlpha(ped)
+    SetEntityLodDist(ped, 1000)
     makeBaseMannequin(ped)
+    SetEntityVisible(ped, true, false)
+    ResetEntityAlpha(ped)
     return ped
 end
 
@@ -251,23 +217,28 @@ end
 
 local function focusCamera(mode, fovOverride)
     local ent = activeEntity()
-    if not ent then return end
+    if not ent or not DoesEntityExist(ent) then return end
     mode = mode or currentFocus or Config.Studio.defaultFocus
     currentFocus = mode
     local cfg = Config.Focus[mode] or Config.Focus.full
-    local coords = GetEntityCoords(ent)
-    local heading = math.rad(GetEntityHeading(ent))
     local off = cfg.offset
-    local camX = coords.x + math.sin(heading) * off.y + math.cos(heading) * off.x
-    local camY = coords.y - math.cos(heading) * off.y + math.sin(heading) * off.x
-    local camZ = coords.z + off.z
+
+    -- GTA local Y points forward. The preview entity faces the camera, therefore
+    -- this places the camera in front of the mannequin instead of behind it.
+    local camCoords = GetOffsetFromEntityInWorldCoords(ent, off.x, off.y, off.z)
+    local pointCoords = GetOffsetFromEntityInWorldCoords(ent, 0.0, 0.0, cfg.pointZ or 0.0)
+
     if not cam then cam = CreateCam('DEFAULT_SCRIPTED_CAMERA', true) end
-    SetCamCoord(cam, camX, camY, camZ)
-    PointCamAtEntity(cam, ent, 0.0, 0.0, cfg.pointZ, true)
+    SetCamActive(cam, true)
+    SetCamCoord(cam, camCoords.x, camCoords.y, camCoords.z)
+    PointCamAtCoord(cam, pointCoords.x, pointCoords.y, pointCoords.z)
+    SetCamNearClip(cam, 0.03)
+    SetCamFarClip(cam, 250.0)
     currentFov = fovOverride or currentFov or cfg.fov
     currentFov = math.max(Config.Studio.minFov, math.min(Config.Studio.maxFov, currentFov))
     SetCamFov(cam, currentFov)
-    RenderScriptCams(true, true, 350, true, true)
+    SetFocusEntity(ent)
+    RenderScriptCams(true, true, 250, true, true)
 end
 
 local function destroyCam()
@@ -276,6 +247,7 @@ local function destroyCam()
         DestroyCam(cam, false)
         cam = nil
     end
+    ClearFocus()
 end
 
 local function setPlayerPreviewState(state)
@@ -338,14 +310,8 @@ local function applyPreviewToPlayer(save)
         for k, v in pairs(skin) do oldSkin[k] = v end
         applySkinToPlayer(oldSkin, save)
     else
-        -- BUGFIX (live report): this "no oldSkin captured" fallback path (hit whenever
-        -- getSkin() returned nil, which it always did on servers without
-        -- esx_skin/skinchanger running - e.g. rcore_clothing setups) applied the skin to
-        -- the ped via natives (correct) but then unconditionally saved through
-        -- 'esx_skin:save', which nothing listens to on such servers. Route through our
-        -- own saveAppearanceSkin event instead so the change is actually persisted.
         importSkinToPed(PlayerPedId(), skin)
-        if save then getSkin(function(s) TriggerServerEvent('realrpg_clothing_designer:saveAppearanceSkin', s) end) end
+        if save then getSkin(function(s) TriggerServerEvent('esx_skin:save', s) end) end
     end
     notify(t('applied'), 'success')
 end
@@ -359,11 +325,12 @@ local function setupPreview(kind, keepSkin)
         previewState.mode = 'separate_object'
     else
         previewPed = createPreviewPed()
-        previewState.mode = 'ped_fallback'
+        previewState.mode = 'ped_preview'
         if previousSkin and previewPed then importSkinToPed(previewPed, previousSkin) end
     end
     currentFov = (Config.Focus[Config.Studio.defaultFocus] or Config.Focus.full).fov
     local data = Config.PreviewObjects[previewState.previewType]
+    Wait(75)
     focusCamera((data and data.focus) or Config.Studio.defaultFocus)
 end
 
@@ -409,17 +376,11 @@ local function openDesigner(options)
     uiOpen = true
     screenshotOpen = options.screenshotMode == true
     currentShopCoords = options.coords
-    previewState = { skin = {}, components = {}, props = {}, canvas = {}, previewType = options.previewType or 'hoodie', mode = 'ped_fallback', characterCreation = options.characterCreation == true or options.creation == true }
+    previewState = { skin = {}, components = {}, props = {}, canvas = {}, previewType = options.previewType or 'hoodie', mode = 'ped_preview' }
     getSkin(function(skin) oldSkin = skin end)
     if Config.Appearance.characterCreationTeleport and options.creation then
         SetEntityCoords(PlayerPedId(), Config.Appearance.characterCreationCoords.x, Config.Appearance.characterCreationCoords.y, Config.Appearance.characterCreationCoords.z)
         SetEntityHeading(PlayerPedId(), Config.Appearance.characterCreationCoords.w)
-    end
-    -- BUGFIX (V14): Config.TeleportWhenCreatingChar was declared but never applied.
-    if previewState.characterCreation and Config.TeleportWhenCreatingChar and Config.TeleportWhenCreatingChar.Enable and not options.skipTeleport then
-        local c = Config.TeleportWhenCreatingChar.Coords
-        SetEntityCoords(PlayerPedId(), c.x, c.y, c.z, false, false, false, true)
-        SetEntityHeading(PlayerPedId(), c.w)
     end
     setPlayerPreviewState(true)
     setupPreview(previewState.previewType)
@@ -443,28 +404,46 @@ local function closeDesigner(apply, save)
         applySkinToPlayer(oldSkin, false)
         notify(t('cancelled'), 'info')
     end
-    -- BUGFIX (V14): originalCoords was captured on open but never used anywhere. Now that
-    -- character-creation teleports are actually wired up (see below), restore the player's
-    -- original position when the designer is cancelled without applying.
-    if not apply and previewState.characterCreation and originalCoords then
-        SetEntityCoords(PlayerPedId(), originalCoords.x, originalCoords.y, originalCoords.z, false, false, false, true)
-    end
-    -- BUGFIX (V14): Config.SetCoordsAfterFinalize / Config.TeleportWhenCreatingChar and
-    -- Config.CharacterFinalized were declared but never used anywhere. Wire them up so
-    -- character-creation flows can actually teleport the player and run the server hook.
-    if previewState.characterCreation then
-        if apply and Config.SetCoordsAfterFinalize and Config.SetCoordsAfterFinalize.Enable then
-            local c = Config.SetCoordsAfterFinalize.Coords
-            SetEntityCoords(PlayerPedId(), c.x, c.y, c.z, false, false, false, true)
-            SetEntityHeading(PlayerPedId(), c.w)
-        end
-        if apply then TriggerServerEvent('realrpg_clothing_designer:characterFinalized') end
-    end
     destroyCam()
     deleteEntities()
     setPlayerPreviewState(false)
     SendNUIMessage({ action = 'hide' })
 end
+
+-- Keep the GTA preview readable at night and prevent the game HUD from bleeding
+-- through the transparent NUI preview window. These natives run only while open.
+CreateThread(function()
+    while true do
+        if uiOpen then
+            if Config.Studio.hideHudDuringPreview ~= false then
+                HideHudAndRadarThisFrame()
+            end
+
+            local ent = activeEntity()
+            if ent and DoesEntityExist(ent) and Config.Studio.previewLighting ~= false then
+                local coords = GetEntityCoords(ent)
+                local forward = GetEntityForwardVector(ent)
+                local frontDistance = tonumber(Config.Studio.previewLightFrontDistance) or 1.35
+                local intensity = tonumber(Config.Studio.previewLightIntensity) or 3.2
+                DrawLightWithRange(
+                    coords.x + forward.x * frontDistance,
+                    coords.y + forward.y * frontDistance,
+                    coords.z + 1.25,
+                    205, 220, 255, 5.0, intensity
+                )
+                DrawLightWithRange(
+                    coords.x - forward.x * 0.55,
+                    coords.y - forward.y * 0.55,
+                    coords.z + 1.55,
+                    139, 92, 246, 3.0, 1.65
+                )
+            end
+            Wait(0)
+        else
+            Wait(300)
+        end
+    end
+end)
 
 exports('openDesigner', openDesigner)
 exports('openClothingDesigner', openDesigner)
@@ -473,12 +452,6 @@ exports('openWardrobe', function() openDesigner({ previewType = 'hoodie', contex
 exports('openOrders', function() openDesigner({ previewType = 'hoodie', context = 'command' }); Wait(250); SendNUIMessage({ action = 'forceSection', section = 'Orders' }) end)
 
 RegisterNetEvent('realrpg_clothing_designer:open', openDesigner)
--- BUGFIX (V14): also register the configurable legacy alias name from
--- Config.RPC.realrpgOpenEvent (falls back to the same literal above when unset/default).
--- rpcLegacyOpenEvent/rpcPublicOpenEvent are defined near the top of this file.
-if rpcLegacyOpenEvent ~= 'realrpg_clothing_designer:open' then
-    RegisterNetEvent(rpcLegacyOpenEvent, openDesigner)
-end
 RegisterNetEvent('realrpg_clothing_designer:openStore', function(kind) openDesigner({ previewType = kind or 'hoodie' }) end)
 RegisterNetEvent('realrpg_clothing_designer:openScreenshotMenu', function() openDesigner({ screenshotMode = true }) end)
 RegisterNetEvent('realrpg_clothing_designer:openOrders', function() openDesigner({ previewType = 'hoodie', context = 'command' }); Wait(250); SendNUIMessage({ action = 'forceSection', section = 'Orders' }) end)
@@ -518,14 +491,7 @@ RegisterNetEvent('realrpg_clothing_designer:wearOnOff', function(kind, data)
             SetPedComponentVariation(ped, c.id, drawable, tonumber(data.texture) or 0, 2)
         end
     end
-    -- BUGFIX (live report): this unconditionally saved through 'esx_skin:save', which
-    -- only works when esx_skin/skinchanger is actually running. On servers using
-    -- rcore_clothing (or any other appearance system) this event has no listener, so the
-    -- toggle appeared to work but was never persisted. Route through our own
-    -- saveAppearanceSkin event instead, consistent with applySkinToPlayer() above.
-    if Config.Appearance.saveOnApply then
-        getSkin(function(skin) TriggerServerEvent('realrpg_clothing_designer:saveAppearanceSkin', skin) end)
-    end
+    if Config.Appearance.saveOnApply then getSkin(function(skin) TriggerServerEvent('esx_skin:save', skin) end) end
 end)
 
 RegisterNetEvent('realrpg_clothing_designer:applyMetadataOutfit', function(metadata)
@@ -577,26 +543,8 @@ RegisterNUICallback('changePreviewType', function(data, cb)
     cb({ ok = activeEntity() ~= nil, mode = previewState.mode })
 end)
 
--- BUGFIX (V14): Config.AllowedModels was declared but never checked, so the NUI could
--- request any model hash and setPlayerModel would happily switch the player's ped to it.
--- Also wires up Config.ShowAllPeds (declared but unused): when true it bypasses the
--- AllowedModels allow-list entirely and permits any ped model.
-local function isModelAllowed(model)
-    if Config.ShowAllPeds then return true end
-    if not Config.AllowedModels or #Config.AllowedModels == 0 then return true end
-    local modelStr = tostring(model)
-    for _, allowed in ipairs(Config.AllowedModels) do
-        if tostring(allowed):lower() == modelStr:lower() then return true end
-    end
-    return false
-end
-
 RegisterNUICallback('setModel', function(data, cb)
     local model = data and data.model
-    if not isModelAllowed(model) then
-        cb({ ok = false, error = t('not_allowed_model') })
-        return
-    end
     local hash = model and loadModel(model)
     if hash then
         SetPlayerModel(PlayerId(), hash)
@@ -786,6 +734,20 @@ RegisterNUICallback('adminListOrders', function(data, cb)
     end, data and data.status or 'pending')
 end)
 
+RegisterNUICallback('adminLoadOrder', function(data, cb)
+    ESX.TriggerServerCallback('realrpg_clothing_designer:adminGetOrder', function(row)
+        if not row or not row.metadata then cb({ ok = false }) return end
+        local md = row.metadata
+        if md.previewType then setupPreview(md.previewType, false) end
+        if previewPed and md.skin then importSkinToPed(previewPed, md.skin) end
+        previewState.skin = md.skin or {}
+        previewState.components = md.components or {}
+        previewState.props = md.props or {}
+        previewState.canvas = md.canvas or {}
+        cb({ ok = true, id = row.id, designId = row.design_id or md.designId, canvas = previewState.canvas, image = md.image, name = md.label, customTexture = md.customTexture })
+    end, tonumber(data.id))
+end)
+
 RegisterNUICallback('adminSetOrderStatus', function(data, cb)
     ESX.TriggerServerCallback('realrpg_clothing_designer:adminSetOrderStatus', function(result)
         local msg = result and result.ok and ('Státusz frissítve: '..(result.status or data.status or '')) or (result and result.error or 'Nem sikerült.')
@@ -852,6 +814,68 @@ RegisterNUICallback('captureImage', function(data, cb)
     end
 end)
 
+
+-- ox_inventory client item exports (current supported integration).
+-- Add client.export entries from ox_items.lua to ox_inventory/data/items.lua.
+local function canUseOwnedMetadata(metadata, cb)
+    metadata = metadata or {}
+    ESX.TriggerServerCallback('realrpg_clothing_designer:canUseOwnedItem', function(allowed)
+        if not allowed then
+            notify('Ez a ruhadarab más játékos tulajdona.', 'error')
+            cb(false)
+            return
+        end
+        cb(true)
+    end, metadata.owner)
+end
+
+exports('useOutfit', function(data, slot)
+    if GetResourceState(Config.Inventory.resource or 'ox_inventory') ~= 'started' then return end
+    local metadata = (slot and slot.metadata) or (data and data.metadata) or {}
+    canUseOwnedMetadata(metadata, function(allowed)
+        if not allowed then return end
+        exports[Config.Inventory.resource or 'ox_inventory']:useItem(data, function(used)
+            if not used then return end
+            TriggerEvent('realrpg_clothing_designer:applyMetadataOutfit', metadata)
+        end)
+    end)
+end)
+
+exports('useClothingPart', function(data, slot)
+    if GetResourceState(Config.Inventory.resource or 'ox_inventory') ~= 'started' then return end
+    local md = (slot and slot.metadata) or (data and data.metadata) or {}
+    canUseOwnedMetadata(md, function(allowed)
+        if not allowed then return end
+        exports[Config.Inventory.resource or 'ox_inventory']:useItem(data, function(used)
+            if not used then return end
+            local skin = md.skin or md.components or {}
+            for _, component in ipairs(Config.Components or {}) do
+                if skin[component.key] ~= nil then
+                    TriggerEvent('realrpg_clothing_designer:wearOnOff', 'component', {
+                        key = component.key, id = component.id, drawable = skin[component.key], texture = skin[component.tex] or 0
+                    })
+                    return
+                end
+            end
+            for _, prop in ipairs(Config.Props or {}) do
+                if skin[prop.key] ~= nil then
+                    TriggerEvent('realrpg_clothing_designer:wearOnOff', 'prop', {
+                        key = prop.key, id = prop.id, drawable = skin[prop.key], texture = skin[prop.tex] or 0
+                    })
+                    return
+                end
+            end
+        end)
+    end)
+end)
+
+exports('useDesignToken', function(data, slot)
+    if GetResourceState(Config.Inventory.resource or 'ox_inventory') ~= 'started' then return end
+    exports[Config.Inventory.resource or 'ox_inventory']:useItem(data, function(used)
+        if used then openDesigner({ previewType = 'hoodie', context = 'item', _authorized = true }) end
+    end)
+end)
+
 CreateThread(function()
     if Config.Target.enabled and GetResourceState(Config.Target.resource) == 'started' then
         for i, shop in ipairs(Config.Shops) do
@@ -864,7 +888,7 @@ CreateThread(function()
                     name = 'realrpg_clothing_designer_'..i,
                     icon = 'fa-solid fa-shirt',
                     label = shop.label,
-                    onSelect = function() currentShopCoords = shop.coords; openDesigner({ coords = shop.coords }) end
+                    onSelect = function() currentShopCoords = shop.coords; openDesigner({ coords = shop.coords, context = 'shop' }) end
                 }}
             })
         end
@@ -880,7 +904,7 @@ CreateThread(function()
             if near and not uiOpen then
                 wait = 0
                 if not shown and lib and lib.showTextUI then lib.showTextUI('[E] '..near.label); shown = true end
-                if IsControlJustPressed(0, 38) then currentShopCoords = near.coords; openDesigner({ coords = near.coords }) end
+                if IsControlJustPressed(0, 38) then currentShopCoords = near.coords; openDesigner({ coords = near.coords, context = 'shop' }) end
             else
                 if shown and lib and lib.hideTextUI then lib.hideTextUI(); shown = false end
             end
@@ -967,12 +991,15 @@ end)
 
 -- V12 template flow helper command
 RegisterCommand(Config.TemplateCommand or 'clothingtemplates', function()
-    ESX.TriggerServerCallback('realrpg_clothing_designer:scanTemplates', function(result)
+    ESX.TriggerServerCallback('realrpg_clothing_designer:bridge:rescanTemplates', function(result)
         if not result or result.ok == false then
             notify((result and result.error) or 'Nem sikerült template scan-t futtatni.', 'error')
             return
         end
-        notify(('Template scan kész. Scanned: %s, registered: %s'):format(result.scanned or 0, result.registered or 0), 'success')
+        local scan = result.rescan or result
+        notify(('Template scan kész. Fájl: %s, YDD: %s, regisztrálva: %s'):format(
+            scan.filesFound or 0, scan.yddTemplates or 0, scan.registered or 0
+        ), 'success')
     end)
 end, false)
 
@@ -1079,11 +1106,7 @@ end, false)
 
 -- V14: RealRPG-compatible public client event.
 -- Server must grant access first via exports['realrpg_clothing_designer']:grantPlayerAccess(source)
-RegisterNetEvent(rpcPublicOpenEvent, function(options)
-    if Config.RPC and Config.RPC.enabled == false then
-        openDesigner(options or { previewType = 'hoodie' })
-        return
-    end
+RegisterNetEvent('realrpg_clothing_designer:client:openClothingDesigner', function(options)
     ESX.TriggerServerCallback('realrpg_clothing_designer:rpcHasAccess', function(hasAccess)
         if not hasAccess then notify('not_authorized', 'error') return end
         openDesigner(options or { previewType = 'hoodie' })
@@ -1096,4 +1119,63 @@ end)
 
 AddEventHandler('onResourceStop', function(res)
     if res == GetCurrentResourceName() then TriggerServerEvent('realrpg_clothing_designer:server:uiClosed') end
+end)
+
+
+-- V15: true model texture editor bridge
+local selectedTemplateModel = nil
+
+local currentRuntimeTexture = { lastImage = nil, template = nil }
+
+local function applyRuntimeTextureToPreview(data)
+    if not data or not data.image then return false end
+    currentRuntimeTexture.lastImage = data.image
+    currentRuntimeTexture.template = selectedTemplateModel or data.template
+    currentRuntimeTexture.template = data.template
+    -- The NUI now sends the edited UV canvas as a PNG dataURL on every change.
+    -- Final live replacement needs the streamed model material to point to the configured TXD/TXN.
+    SendNUIMessage({ action = 'liveTextureAccepted', template = data.template })
+    return true
+end
+
+RegisterNUICallback('liveTextureUpdate', function(data, cb)
+    cb({ ok = applyRuntimeTextureToPreview(data) })
+end)
+
+RegisterNUICallback('editorTool', function(data, cb)
+    cb({ ok = true, tool = data and data.tool or 'select' })
+end)
+
+RegisterNUICallback('loadTemplateForPreview', function(data, cb)
+    selectedTemplateModel = data or nil
+    if data and data.preview_type then
+        previewState.previewType = data.preview_type
+    elseif data and data.category then
+        local map = { jbib = 'jbib', uppr = 'tshirt', lowr = 'pants', feet = 'shoes', accs = 'cap', berd = 'cap', head = 'cap' }
+        previewState.previewType = map[data.category] or previewState.previewType
+    end
+    if uiOpen then
+        setupPreview(previewState.previewType, true)
+        -- If the asset is a freemode clothing component instead of a true object model,
+        -- apply it on the hidden/isolated preview ped as a technical fallback. A true standalone
+        -- 3D object still requires exported object/worker output.
+        if previewPed and data and data.componentId and data.drawable then
+            SetPedComponentVariation(previewPed, tonumber(data.componentId) or 11, tonumber(data.drawable) or 0, tonumber(data.texture) or 0, 2)
+        elseif previewPed and data and data.category == 'jbib' and data.drawable then
+            SetPedComponentVariation(previewPed, 11, tonumber(data.drawable) or 0, tonumber(data.texture) or 0, 2)
+        end
+    end
+    cb({ ok = true })
+end)
+
+RegisterNUICallback('rescanTemplates', function(data, cb)
+    ESX.TriggerServerCallback('realrpg_clothing_designer:bridge:rescanTemplates', function(result)
+        cb(result or { ok = false, catalog = {} })
+    end)
+end)
+
+RegisterNUICallback('exportCurrentAddon', function(data, cb)
+    ESX.TriggerServerCallback('realrpg_clothing_designer:exportCurrentAddon', function(result)
+        cb(result or { ok = false })
+    end, data)
 end)

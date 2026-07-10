@@ -1,7 +1,7 @@
 Config = {}
 
 Config.Debug = false
-Config.Version = '14.0.0'
+Config.Version = '17.3.0'
 Config.Locale = 'hu'
 Config.Framework = 'esx' -- esx / qb-ready placeholder
 Config.Command = 'clothingdesigner'
@@ -33,6 +33,70 @@ Config.AdminCommandsRealRPG = {
     restrictedOpen = 'giverestrictedclothingmenu'
 }
 
+
+Config.ModelEditor = {
+    enabled = true,
+    layout = 'preview_left_uv_center_inspector_right',
+    liveTexturePreview = true,
+    useDuiRuntimeTexture = true,
+    textureUpdateDebounce = 120,
+    defaultTextureSize = 1024,
+    tools = { 'select', 'move', 'brush', 'eraser', 'image', 'text', 'fill', 'pipette', 'ai' },
+    panels = { layers = true, templates = true, saved = true, slots = true },
+    textureReplacement = {
+        enabled = true,
+        runtimeTxd = 'realrpg_runtime_cloth_txd',
+        runtimeTxn = 'realrpg_runtime_cloth_txn',
+        originalTxdFallback = 'realrpg_template',
+        originalTxnFallback = 'texture'
+    }
+}
+
+
+
+-- V16: exact clothing template files you already sent.
+-- These are GTA freemode clothing component assets. Put them here:
+-- templates/cloth_templates/male/jbib/<file>.ydd
+-- templates/cloth_templates/male/jbib/<file>.ytd
+Config.KnownClothingModels = {
+    {
+        key = 'male_jbib_jbib_000',
+        label = 'Male Jbib 000',
+        gender = 'male', component = 'jbib', previewType = 'jbib', componentId = 11,
+        drawable = 0, texture = 0,
+        ydd = 'jbib_000_u.ydd', ytd = 'jbib_diff_000_a_uni.ytd',
+        prefixedYdd = 'mp_m_freemode_01^jbib_000_u.ydd', prefixedYtd = 'mp_m_freemode_01^jbib_diff_000_a_uni.ytd',
+        txd = 'mp_m_freemode_01^jbib_diff_000_a_uni', txn = 'jbib_diff_000_a_uni'
+    },
+    {
+        key = 'male_jbib_jbib_005',
+        label = 'Male Jbib 005',
+        gender = 'male', component = 'jbib', previewType = 'jbib', componentId = 11,
+        drawable = 5, texture = 0,
+        ydd = 'jbib_005_u.ydd', ytd = 'jbib_diff_005_a_uni.ytd',
+        prefixedYdd = 'mp_m_freemode_01^jbib_005_u.ydd', prefixedYtd = 'mp_m_freemode_01^jbib_diff_005_a_uni.ytd',
+        txd = 'mp_m_freemode_01^jbib_diff_005_a_uni', txn = 'jbib_diff_005_a_uni'
+    },
+    {
+        key = 'male_jbib_jbib_007',
+        label = 'Male Jbib 007',
+        gender = 'male', component = 'jbib', previewType = 'jbib', componentId = 11,
+        drawable = 7, texture = 0,
+        ydd = 'jbib_007_u.ydd', ytd = 'jbib_diff_007_a_uni.ytd',
+        prefixedYdd = 'mp_m_freemode_01^jbib_007_u.ydd', prefixedYtd = 'mp_m_freemode_01^jbib_diff_007_a_uni.ytd',
+        txd = 'mp_m_freemode_01^jbib_diff_007_a_uni', txn = 'jbib_diff_007_a_uni'
+    },
+    {
+        key = 'male_jbib_jbib_013',
+        label = 'Male Jbib 013',
+        gender = 'male', component = 'jbib', previewType = 'jbib', componentId = 11,
+        drawable = 13, texture = 0,
+        ydd = 'jbib_013_u.ydd', ytd = 'jbib_diff_013_a_uni.ytd',
+        prefixedYdd = 'mp_m_freemode_01^jbib_013_u.ydd', prefixedYtd = 'mp_m_freemode_01^jbib_diff_013_a_uni.ytd',
+        txd = 'mp_m_freemode_01^jbib_diff_013_a_uni', txn = 'jbib_diff_013_a_uni'
+    }
+}
+
 Config.Target = {
     enabled = true,
     resource = 'ox_target',
@@ -44,22 +108,26 @@ Config.Database = {
     autoInstall = true
 }
 
+Config.StorageLimits = {
+    maxCanvasJson = 18000000,
+    maxImageData = 15000000,
+    maxLayers = 80
+}
+
 -- V12: troubleshooting/docs parity settings. These are safe checks/helpers for our own RealRPG script.
 Config.Worker = {
     Enabled = true,
-    Mode = 'inprocess', -- external / inprocess. External is only needed for advanced export/preview worker tasks.
-    NodePath = 'node',
-    PowerShellPath = '', -- Windows: full path to powershell.exe if short powershell.exe fails. Linux: /usr/bin/pwsh when required.
-    RequiredFile = 'worker/fivemRpcWorker.cjs',
-    ToolsFolder = 'worker/tools',
+    Mode = 'resource',
+    Resource = 'realrpg_clothing_worker',
+    Port = 33442,
     ExpectedLogs = true
 }
 
 Config.Permissions = {
     RequireUnsafeChildProcess = false, -- true only if Worker.Mode = external and your host allows it
-    UnsafeChildProcessLine = 'add_unsafe_child_process_permission realrpg_clothing_designer',
+    UnsafeChildProcessLine = 'add_unsafe_child_process_permission realrpg_clothing_worker',
     RequireFilesystemExportPermission = true,
-    FilesystemPermissionLine = 'add_filesystem_permission realrpg_clothing_designer write realrpg_clothing_exports'
+    FilesystemPermissionLine = 'add_filesystem_permission realrpg_clothing_worker write realrpg_clothing_designer'
 }
 
 Config.Authorization = {
@@ -105,17 +173,13 @@ Config.Inventory = {
     resource = 'ox_inventory',
     outfitItem = 'realrpg_outfit',
     clothingPartItem = 'realrpg_clothing_part',
-    designItem = 'realrpg_clothing_design'
+    designItem = 'realrpg_clothing_design',
+    enforceOwner = true -- az item csak a metadata.owner tulajdonosa vagy admin által használható
 }
 
 Config.Appearance = {
     -- Primary: esx_skin. Other adapters are included as safe wrappers, not full replacements for paid appearance scripts.
-    -- Valid values: esx_skin / fivem-appearance / illenium-appearance / rcore_clothing / custom
-    -- NOTE: only 'esx_skin', 'fivem-appearance' and 'illenium-appearance' have dedicated
-    -- integrations. Any other value (including 'rcore_clothing') uses the native
-    -- ped-component fallback (GetPed*/SetPed* natives), which works with ANY appearance
-    -- script since it doesn't depend on that script's own events/exports.
-    system = 'rcore_clothing', -- set to your server's appearance script name
+    system = 'esx_skin', -- esx_skin / fivem-appearance / illenium-appearance / qb-clothing / custom
     saveOnApply = true,
     restoreOnCancel = true,
     stopOtherAppearanceScripts = false, -- RealRPG safety: false by default; enable only if you want RealRPG-like aggressive stop behavior.
@@ -361,7 +425,12 @@ Config.Studio = {
     minFov = 16.0,
     maxFov = 48.0,
     maxDistanceFromShop = 30.0,
-    idleAnim = { dict = 'anim@heists@heist_corona@team_idles@male_a', name = 'idle' }
+    idleAnim = { dict = 'anim@heists@heist_corona@team_idles@male_a', name = 'idle' },
+    previewGroundOffset = 0.0,
+    previewLighting = true,
+    previewLightFrontDistance = 1.35,
+    previewLightIntensity = 3.2,
+    hideHudDuringPreview = true
 }
 
 -- Separated preview objects. If these models are streamed, V12 uses them as true object preview.
@@ -371,7 +440,8 @@ Config.PreviewObjects = {
     tshirt = { label = 'T-shirt', model = 'realrpg_preview_tshirt', component = 'torso', fallback = 'ped', focus = 'torso' },
     pants = { label = 'Pants', model = 'realrpg_preview_pants', component = 'pants', fallback = 'ped', focus = 'legs' },
     shoes = { label = 'Shoes', model = 'realrpg_preview_shoes', component = 'shoes', fallback = 'ped', focus = 'feet' },
-    cap = { label = 'Cap', model = 'realrpg_preview_cap', component = 'hat', fallback = 'ped', focus = 'head' }
+    cap = { label = 'Cap', model = 'realrpg_preview_cap', component = 'hat', fallback = 'ped', focus = 'head' },
+    jbib = { label = 'Jbib / Top', model = 'realrpg_preview_jbib', component = 'jbib', fallback = 'componentPed', focus = 'torso' }
 }
 
 Config.PlayerModels = {

@@ -3,8 +3,8 @@ game 'gta5'
 lua54 'yes'
 
 author 'RealRPG / VeZse Development'
-description 'RealRPG Clothing Designer V15 - UV texture workbench with live 3D preview'
-version '15.0.0'
+description 'RealRPG Clothing Designer V17.3 - fixed 3D preview and responsive UV studio'
+version '17.3.0'
 
 shared_scripts {
     '@ox_lib/init.lua',
@@ -30,23 +30,15 @@ files {
     'html/uv_workbench.css',
     'html/uv_workbench.js',
     'html/assets/*.png',
-    'stream/*.ydr',
-    'stream/*.ydd',
-    'stream/*.ytd',
-    'stream/*.ymt',
-    'templates/cloth_templates/**/*.ydd',
-    'templates/cloth_templates/**/*.ytd',
     'templates/template_previews/**/*.png',
     'templates/template_previews/**/*.webp',
     'templates/template_previews/**/*.jpg',
-    'templates/template_previews/**/*.jpeg',
-    'templates/template_slots/**/*.ytd',
-    'worker/fivemRpcWorker.cjs',
-    'worker/tools/*',
-    'TROUBLESHOOTING_V12.md'
+    'templates/template_previews/**/*.jpeg'
 }
 
 dependencies {
     'es_extended',
-    'oxmysql'
+    'oxmysql',
+    'ox_lib',
+    'ox_inventory'
 }

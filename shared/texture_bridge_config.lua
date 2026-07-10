@@ -1,4 +1,4 @@
--- RealRPG Clothing Designer V14.1 texture bridge settings.
+-- RealRPG Clothing Designer V17 texture bridge settings.
 -- This file is loaded after shared/config.lua, so it only adds bridge-specific config.
 
 Config.TextureBridge = Config.TextureBridge or {}

@@ -1,7 +1,7 @@
 local ESX = exports['es_extended']:getSharedObject()
 
 local function dbg(...)
-    if Config.Debug then print('[realrpg_clothing_designer:v14]', ...) end
+    if Config.Debug then print('[realrpg_clothing_designer:v17]', ...) end
 end
 
 local function identifier(src)
@@ -16,14 +16,70 @@ local function safeJsonDecode(value)
     return {}
 end
 
+local function normalizePlayerDesignPayload(data)
+    data = type(data) == 'table' and data or {}
+    local limits = Config.StorageLimits or {}
+    local canvas = type(data.canvas) == 'table' and data.canvas or {}
+    local layers = canvas.layers
 
--- BUGFIX (V14): the resource shipped with TWO completely disconnected authorization
--- stores - this old `grantedAccess` table (used by openDesigner()/checkAccess) and a
--- separate `rcdAuthorizedPlayers` table further down (used by the new
--- client:openClothingDesigner RPC flow / rpcHasAccess). Granting access through one
--- system was silently ignored by the other. Merged into a single shared store so both
--- code paths agree on who has access.
-local sharedAccess = {}
+    if layers ~= nil and type(layers) ~= 'table' then
+        return nil, 'Hibás réteglista.'
+    end
+    if type(layers) == 'table' and #layers > (tonumber(limits.maxLayers) or 80) then
+        return nil, 'Túl sok réteg van a tervben.'
+    end
+
+    local image = data.image and tostring(data.image) or nil
+    if image and #image > (tonumber(limits.maxImageData) or 15000000) then
+        return nil, 'A preview kép túl nagy.'
+    end
+
+    local encodedOk, encodedCanvas = pcall(json.encode, canvas)
+    if not encodedOk then return nil, 'A canvas nem menthető.' end
+    if #encodedCanvas > (tonumber(limits.maxCanvasJson) or 18000000) then
+        return nil, 'A canvas adata túl nagy.'
+    end
+
+    if canvas.template ~= nil then
+        local templateId = tonumber(type(canvas.template) == 'table' and canvas.template.id or nil)
+        if not templateId then return nil, 'Érvénytelen ruhasablon.' end
+
+        local row = MySQL.single.await('SELECT * FROM realrpg_clothing_templates WHERE id = ? AND active = 1 LIMIT 1', { templateId })
+        if not row then return nil, 'A kiválasztott ruhasablon nem található.' end
+
+        local meta = safeJsonDecode(row.meta)
+        local ytdPath = meta.ytdPath or meta.texturePath
+        local yddPath = row.template_path or meta.templatePath
+        local ytdFile = tostring(ytdPath or ''):gsub('\\', '/'):match('([^/]+)$') or ''
+        local txdName = ytdFile:gsub('%.ytd$', '')
+
+        canvas.template = {
+            id = row.id,
+            name = row.name,
+            fileName = row.file_name,
+            fileType = row.file_type,
+            gender = row.gender,
+            component = row.component_key or row.category,
+            category = row.category,
+            drawable = tonumber(row.drawable) or 0,
+            texture = tonumber(row.texture) or 0,
+            templatePath = yddPath,
+            yddPath = yddPath,
+            ytdPath = ytdPath,
+            texturePath = ytdPath,
+            textureName = row.texture_name,
+            originalTxn = row.texture_name,
+            txdName = txdName
+        }
+    end
+
+    data.canvas = canvas
+    data.image = image
+    return data
+end
+
+
+local grantedAccess = {}
 
 local function now()
     return os.time()
@@ -32,20 +88,20 @@ end
 local function hasGrantedAccess(src)
     if not (Config.Authorization and Config.Authorization.Enabled) then return true end
     if Config.Authorization.AllowCommandOpen and IsPlayerAceAllowed(src, Config.AdminPermission) then return true end
-    local entry = sharedAccess[tonumber(src)]
-    return entry ~= nil and (not entry.expires or entry.expires > now())
+    local expires = grantedAccess[tonumber(src)]
+    return expires and expires > now()
 end
 
 local function grantAccess(src, minutes)
     src = tonumber(src)
     if not src then return false end
     local ttl = tonumber(minutes) or (Config.Authorization and Config.Authorization.GrantTimeoutMinutes) or 30
-    sharedAccess[src] = { expires = now() + (ttl * 60), grantedAt = now(), identifier = identifier(src) }
+    grantedAccess[src] = now() + (ttl * 60)
     return true
 end
 
 local function revokeAccess(src)
-    sharedAccess[tonumber(src)] = nil
+    grantedAccess[tonumber(src)] = nil
 end
 
 local function takePayment(src, amount)
@@ -117,6 +173,7 @@ local function installDatabase()
           `reviewed_by` varchar(80) DEFAULT NULL,
           `reviewed_at` datetime DEFAULT NULL,
           `note` varchar(255) DEFAULT NULL,
+          `item_delivered` tinyint(1) NOT NULL DEFAULT 0,
           `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
           PRIMARY KEY (`id`),
           KEY `identifier` (`identifier`),
@@ -153,87 +210,45 @@ local function installDatabase()
           `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
           `updated_at` datetime DEFAULT NULL,
           PRIMARY KEY (`id`),
-          UNIQUE KEY `file_name` (`file_name`)
+          UNIQUE KEY `template_identity` (`gender`,`category`,`file_name`)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;]]
     }
-    for _, q in ipairs(queries) do MySQL.query(q) end
-
-    -- BUGFIX (V14 live report): 'CREATE TABLE IF NOT EXISTS' is a no-op when the table
-    -- already exists - it does NOT add missing columns. If realrpg_clothing_designs (or
-    -- realrpg_clothing_orders) already existed on a server with an incomplete/older
-    -- schema (e.g. missing the `name` column), every query selecting/inserting that
-    -- column fails at runtime with "Unknown column 'name' in 'SELECT'" even though the
-    -- CREATE TABLE above defines it correctly for fresh installs. Only `is_public` had a
-    -- self-healing ALTER TABLE below; the rest of the design columns did not. Added full
-    -- ALTER TABLE ... ADD COLUMN IF NOT EXISTS coverage for every column in both tables so
-    -- an existing-but-incomplete table gets repaired automatically on next resource start.
-    MySQL.query("ALTER TABLE realrpg_clothing_designs ADD COLUMN IF NOT EXISTS name varchar(80) NOT NULL DEFAULT 'RealRPG Design'")
-    MySQL.query("ALTER TABLE realrpg_clothing_designs ADD COLUMN IF NOT EXISTS gender varchar(20) NOT NULL DEFAULT 'unknown'")
-    MySQL.query("ALTER TABLE realrpg_clothing_designs ADD COLUMN IF NOT EXISTS preview_type varchar(40) NOT NULL DEFAULT 'hoodie'")
-    MySQL.query('ALTER TABLE realrpg_clothing_designs ADD COLUMN IF NOT EXISTS skin longtext DEFAULT NULL')
-    MySQL.query('ALTER TABLE realrpg_clothing_designs ADD COLUMN IF NOT EXISTS components longtext DEFAULT NULL')
-    MySQL.query('ALTER TABLE realrpg_clothing_designs ADD COLUMN IF NOT EXISTS props longtext DEFAULT NULL')
-    MySQL.query('ALTER TABLE realrpg_clothing_designs ADD COLUMN IF NOT EXISTS canvas longtext DEFAULT NULL')
-    MySQL.query('ALTER TABLE realrpg_clothing_designs ADD COLUMN IF NOT EXISTS image mediumtext DEFAULT NULL')
-    MySQL.query('ALTER TABLE realrpg_clothing_designs ADD COLUMN IF NOT EXISTS is_public tinyint(1) NOT NULL DEFAULT 0')
-
-    MySQL.query("ALTER TABLE realrpg_clothing_orders ADD COLUMN IF NOT EXISTS design_id int(11) DEFAULT NULL")
-    MySQL.query("ALTER TABLE realrpg_clothing_orders ADD COLUMN IF NOT EXISTS name varchar(80) NOT NULL DEFAULT 'RealRPG Outfit'")
-    MySQL.query("ALTER TABLE realrpg_clothing_orders ADD COLUMN IF NOT EXISTS type varchar(30) NOT NULL DEFAULT 'outfit'")
-    MySQL.query('ALTER TABLE realrpg_clothing_orders ADD COLUMN IF NOT EXISTS metadata longtext DEFAULT NULL')
-    MySQL.query("ALTER TABLE realrpg_clothing_orders ADD COLUMN IF NOT EXISTS status varchar(30) NOT NULL DEFAULT 'pending'")
-    MySQL.query('ALTER TABLE realrpg_clothing_orders ADD COLUMN IF NOT EXISTS price int(11) NOT NULL DEFAULT 0')
-    MySQL.query('ALTER TABLE realrpg_clothing_orders ADD COLUMN IF NOT EXISTS reviewed_by varchar(80) DEFAULT NULL')
-    MySQL.query('ALTER TABLE realrpg_clothing_orders ADD COLUMN IF NOT EXISTS reviewed_at datetime DEFAULT NULL')
-    MySQL.query('ALTER TABLE realrpg_clothing_orders ADD COLUMN IF NOT EXISTS note varchar(255) DEFAULT NULL')
-    MySQL.query([[CREATE TABLE IF NOT EXISTS `realrpg_clothing_access` (`identifier` varchar(80) NOT NULL, `expires_at` int(11) NOT NULL DEFAULT 0, `granted_by` varchar(80) DEFAULT NULL, `created_at` timestamp NOT NULL DEFAULT current_timestamp(), PRIMARY KEY (`identifier`)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;]])
-    MySQL.query("ALTER TABLE realrpg_clothing_templates ADD COLUMN IF NOT EXISTS file_type varchar(10) NOT NULL DEFAULT 'ydd'")
-    MySQL.query("ALTER TABLE realrpg_clothing_templates ADD COLUMN IF NOT EXISTS category varchar(50) NOT NULL DEFAULT 'other'")
-    MySQL.query("ALTER TABLE realrpg_clothing_templates ADD COLUMN IF NOT EXISTS gender varchar(20) NOT NULL DEFAULT 'unisex'")
-    MySQL.query("ALTER TABLE realrpg_clothing_templates ADD COLUMN IF NOT EXISTS preview_type varchar(40) NOT NULL DEFAULT 'hoodie'")
-    MySQL.query("ALTER TABLE realrpg_clothing_templates ADD COLUMN IF NOT EXISTS component_key varchar(60) DEFAULT NULL")
-    MySQL.query("ALTER TABLE realrpg_clothing_templates ADD COLUMN IF NOT EXISTS model_name varchar(120) DEFAULT NULL")
-    MySQL.query("ALTER TABLE realrpg_clothing_templates ADD COLUMN IF NOT EXISTS texture_name varchar(120) DEFAULT NULL")
-    MySQL.query("ALTER TABLE realrpg_clothing_templates ADD COLUMN IF NOT EXISTS drawable int(11) NOT NULL DEFAULT 0")
-    MySQL.query("ALTER TABLE realrpg_clothing_templates ADD COLUMN IF NOT EXISTS texture int(11) NOT NULL DEFAULT 0")
-    MySQL.query("ALTER TABLE realrpg_clothing_templates ADD COLUMN IF NOT EXISTS image mediumtext DEFAULT NULL")
-    MySQL.query("ALTER TABLE realrpg_clothing_templates ADD COLUMN IF NOT EXISTS meta longtext DEFAULT NULL")
-    MySQL.query("ALTER TABLE realrpg_clothing_templates ADD COLUMN IF NOT EXISTS active tinyint(1) NOT NULL DEFAULT 1")
-    MySQL.query("ALTER TABLE realrpg_clothing_templates ADD COLUMN IF NOT EXISTS updated_at datetime DEFAULT NULL")
-    MySQL.query("ALTER TABLE realrpg_clothing_templates ADD COLUMN IF NOT EXISTS template_key varchar(180) DEFAULT NULL")
-    MySQL.query("ALTER TABLE realrpg_clothing_templates ADD COLUMN IF NOT EXISTS template_path varchar(255) DEFAULT NULL")
-    MySQL.query("ALTER TABLE realrpg_clothing_templates ADD COLUMN IF NOT EXISTS preview_path varchar(255) DEFAULT NULL")
-    MySQL.query("ALTER TABLE realrpg_clothing_templates ADD COLUMN IF NOT EXISTS slot_path varchar(255) DEFAULT NULL")
-    MySQL.query("ALTER TABLE realrpg_clothing_templates ADD COLUMN IF NOT EXISTS managed_preview tinyint(1) NOT NULL DEFAULT 0")
-    MySQL.query("ALTER TABLE realrpg_clothing_templates ADD COLUMN IF NOT EXISTS skipped_reason varchar(255) DEFAULT NULL")
+    for _, q in ipairs(queries) do MySQL.query.await(q) end
+    MySQL.query.await('ALTER TABLE realrpg_clothing_designs ADD COLUMN IF NOT EXISTS is_public tinyint(1) NOT NULL DEFAULT 0')
+    MySQL.query.await("ALTER TABLE realrpg_clothing_orders ADD COLUMN IF NOT EXISTS status varchar(30) NOT NULL DEFAULT 'pending'")
+    MySQL.query.await('ALTER TABLE realrpg_clothing_orders ADD COLUMN IF NOT EXISTS price int(11) NOT NULL DEFAULT 0')
+    MySQL.query.await('ALTER TABLE realrpg_clothing_orders ADD COLUMN IF NOT EXISTS reviewed_by varchar(80) DEFAULT NULL')
+    MySQL.query.await('ALTER TABLE realrpg_clothing_orders ADD COLUMN IF NOT EXISTS reviewed_at datetime DEFAULT NULL')
+    MySQL.query.await('ALTER TABLE realrpg_clothing_orders ADD COLUMN IF NOT EXISTS note varchar(255) DEFAULT NULL')
+    MySQL.query.await('ALTER TABLE realrpg_clothing_orders ADD COLUMN IF NOT EXISTS item_delivered tinyint(1) NOT NULL DEFAULT 0')
+    MySQL.query.await([[CREATE TABLE IF NOT EXISTS `realrpg_clothing_access` (`identifier` varchar(80) NOT NULL, `expires_at` int(11) NOT NULL DEFAULT 0, `granted_by` varchar(80) DEFAULT NULL, `created_at` timestamp NOT NULL DEFAULT current_timestamp(), PRIMARY KEY (`identifier`)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;]])
+    MySQL.query.await("ALTER TABLE realrpg_clothing_templates ADD COLUMN IF NOT EXISTS file_type varchar(10) NOT NULL DEFAULT 'ydd'")
+    MySQL.query.await("ALTER TABLE realrpg_clothing_templates ADD COLUMN IF NOT EXISTS category varchar(50) NOT NULL DEFAULT 'other'")
+    MySQL.query.await("ALTER TABLE realrpg_clothing_templates ADD COLUMN IF NOT EXISTS gender varchar(20) NOT NULL DEFAULT 'unisex'")
+    MySQL.query.await("ALTER TABLE realrpg_clothing_templates ADD COLUMN IF NOT EXISTS preview_type varchar(40) NOT NULL DEFAULT 'hoodie'")
+    MySQL.query.await("ALTER TABLE realrpg_clothing_templates ADD COLUMN IF NOT EXISTS component_key varchar(60) DEFAULT NULL")
+    MySQL.query.await("ALTER TABLE realrpg_clothing_templates ADD COLUMN IF NOT EXISTS model_name varchar(120) DEFAULT NULL")
+    MySQL.query.await("ALTER TABLE realrpg_clothing_templates ADD COLUMN IF NOT EXISTS texture_name varchar(120) DEFAULT NULL")
+    MySQL.query.await("ALTER TABLE realrpg_clothing_templates ADD COLUMN IF NOT EXISTS drawable int(11) NOT NULL DEFAULT 0")
+    MySQL.query.await("ALTER TABLE realrpg_clothing_templates ADD COLUMN IF NOT EXISTS texture int(11) NOT NULL DEFAULT 0")
+    MySQL.query.await("ALTER TABLE realrpg_clothing_templates ADD COLUMN IF NOT EXISTS image mediumtext DEFAULT NULL")
+    MySQL.query.await("ALTER TABLE realrpg_clothing_templates ADD COLUMN IF NOT EXISTS meta longtext DEFAULT NULL")
+    MySQL.query.await("ALTER TABLE realrpg_clothing_templates ADD COLUMN IF NOT EXISTS active tinyint(1) NOT NULL DEFAULT 1")
+    MySQL.query.await("ALTER TABLE realrpg_clothing_templates ADD COLUMN IF NOT EXISTS updated_at datetime DEFAULT NULL")
+    MySQL.query.await("ALTER TABLE realrpg_clothing_templates ADD COLUMN IF NOT EXISTS template_key varchar(180) DEFAULT NULL")
+    MySQL.query.await("ALTER TABLE realrpg_clothing_templates ADD COLUMN IF NOT EXISTS template_path varchar(255) DEFAULT NULL")
+    MySQL.query.await("ALTER TABLE realrpg_clothing_templates ADD COLUMN IF NOT EXISTS preview_path varchar(255) DEFAULT NULL")
+    MySQL.query.await("ALTER TABLE realrpg_clothing_templates ADD COLUMN IF NOT EXISTS slot_path varchar(255) DEFAULT NULL")
+    MySQL.query.await("ALTER TABLE realrpg_clothing_templates ADD COLUMN IF NOT EXISTS managed_preview tinyint(1) NOT NULL DEFAULT 0")
+    MySQL.query.await("ALTER TABLE realrpg_clothing_templates ADD COLUMN IF NOT EXISTS skipped_reason varchar(255) DEFAULT NULL")
+    MySQL.query.await('ALTER TABLE realrpg_clothing_templates DROP INDEX IF EXISTS `file_name`')
+    MySQL.query.await('ALTER TABLE realrpg_clothing_templates ADD UNIQUE INDEX IF NOT EXISTS `template_identity` (`gender`,`category`,`file_name`)')
     dbg('Database auto install done')
 end
 
 CreateThread(function()
     Wait(1200)
     installDatabase()
-end)
-
--- BUGFIX (V14): Config.Worker.Mode = 'external' / NodePath / PowerShellPath were declared
--- but nothing ever attempted to launch anything - the "external worker" feature silently
--- did nothing regardless of the setting.
---
--- IMPORTANT LIMITATION (documented here instead of faked): this resource is a pure Lua
--- FXServer resource (client_scripts/server_scripts are .lua, not a Node/JS runtime
--- resource). The FXServer Lua sandbox does NOT provide any API to spawn a real child
--- process: os.execute() is fully blocked, and io.popen() only allows the emulated
--- 'ls'/'dir' commands (see docs-backend.fivem.net/docs/developers/sandbox/). The
--- 'add_unsafe_child_process_permission' server.cfg line applies to FiveM's JS/Node
--- runtime resources, not to Lua resources like this one - setting it will not make
--- io.popen/os.execute able to launch worker/fivemRpcWorker.cjs from here.
--- So instead of pretending to spawn a worker (which would silently fail live), we now
--- fail loudly and explain why, so you don't lose time debugging a "missing" worker.
-CreateThread(function()
-    Wait(1600)
-    if not (Config.Worker and Config.Worker.Enabled) then return end
-    if Config.Worker.Mode == 'external' then
-        dbg('Config.Worker.Mode = "external" is NOT supported: this is a pure Lua FXServer resource and the sandbox blocks os.execute()/io.popen() for anything other than emulated ls/dir. External worker processes must be run as a SEPARATE resource using the Node/JS runtime (fxmanifest \'js\' scripts) and communicated with over HTTP/exports, not spawned from here. Falling back to Mode = "inprocess" behavior (no external worker).')
-    end
 end)
 
 local function addItem(src, itemName, metadata)
@@ -245,11 +260,39 @@ local function addItem(src, itemName, metadata)
     return false, 'Nem sikerült itemet hozzáadni.'
 end
 
+local function compactItemMetadata(metadata, orderId, ownerIdentifier)
+    metadata = metadata or {}
+    return {
+        label = tostring(metadata.label or 'RealRPG Outfit'):sub(1, 80),
+        description = tostring(metadata.description or 'Egyedi RealRPG ruházat'):sub(1, 180),
+        gender = metadata.gender,
+        itemType = metadata.itemType or 'outfit',
+        previewType = metadata.previewType,
+        skin = metadata.skin or {},
+        components = metadata.components or {},
+        props = metadata.props or {},
+        designId = metadata.designId,
+        orderId = orderId,
+        owner = ownerIdentifier,
+        customTexture = metadata.customTexture,
+        createdAt = metadata.createdAt or os.date('%Y-%m-%d %H:%M:%S')
+    }
+end
+
+ESX.RegisterServerCallback('realrpg_clothing_designer:canUseOwnedItem', function(source, cb, ownerIdentifier)
+    if not (Config.Inventory and Config.Inventory.enforceOwner) then cb(true) return end
+    ownerIdentifier = ownerIdentifier and tostring(ownerIdentifier) or ''
+    if ownerIdentifier == '' then cb(true) return end
+    cb(identifier(source) == ownerIdentifier or IsPlayerAceAllowed(source, Config.AdminPermission))
+end)
+
 ESX.RegisterServerCallback('realrpg_clothing_designer:saveDesign', function(source, cb, data)
     local idf = identifier(source)
     if not idf then cb({ ok = false, error = 'Nincs játékos azonosító.' }) return end
+    local normalized, validationError = normalizePlayerDesignPayload(data)
+    if not normalized then cb({ ok = false, error = validationError }) return end
+    data = normalized
     if not takePayment(source, Config.Price.SaveDesign) then cb({ ok = false, error = ('Nincs elég %s.'):format(Config.RealCoin.label or 'pénz') }) return end
-    data = data or {}
     local name = tostring(data.name or 'RealRPG Design'):sub(1, 80)
     local inserted = MySQL.insert.await('INSERT INTO realrpg_clothing_designs (identifier, name, gender, preview_type, skin, components, props, canvas, image) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)', {
         idf,
@@ -260,7 +303,7 @@ ESX.RegisterServerCallback('realrpg_clothing_designer:saveDesign', function(sour
         json.encode(data.components or {}),
         json.encode(data.props or {}),
         json.encode(data.canvas or {}),
-        data.image and tostring(data.image):sub(1, 16000000) or nil
+        data.image and tostring(data.image):sub(1, 15000000) or nil
     })
     cb({ ok = true, id = inserted })
 end)
@@ -286,11 +329,46 @@ end)
 ESX.RegisterServerCallback('realrpg_clothing_designer:orderItem', function(source, cb, data)
     local idf = identifier(source)
     if not idf then cb({ ok = false, error = 'Nincs játékos azonosító.' }) return end
-    data = data or {}
-    local itemType = data.itemType or data.type or 'outfit'
+
+    data = type(data) == 'table' and data or {}
+    local designId = tonumber(data.designId)
+
+    if designId then
+        local ownedDesign = MySQL.single.await('SELECT * FROM realrpg_clothing_designs WHERE id = ? AND identifier = ? LIMIT 1', { designId, idf })
+        if not ownedDesign then cb({ ok = false, error = 'A hivatkozott terv nem a játékos tulajdona.' }) return end
+        data = {
+            name = ownedDesign.name,
+            itemType = data.itemType,
+            type = data.type,
+            designId = designId,
+            gender = ownedDesign.gender,
+            previewType = ownedDesign.preview_type,
+            skin = safeJsonDecode(ownedDesign.skin),
+            components = safeJsonDecode(ownedDesign.components),
+            props = safeJsonDecode(ownedDesign.props),
+            canvas = safeJsonDecode(ownedDesign.canvas),
+            image = ownedDesign.image
+        }
+    end
+
+    local normalized, validationError = normalizePlayerDesignPayload(data)
+    if not normalized then cb({ ok = false, error = validationError }) return end
+    data = normalized
+
+    local itemType = (data.itemType == 'part' or data.type == 'part') and 'part' or 'outfit'
+    local requiresTextureExport = data.canvas and type(data.canvas.layers) == 'table' and #data.canvas.layers > 0 and data.canvas.template ~= nil
     local price = itemType == 'part' and Config.Price.OrderPartItem or Config.Price.OrderOutfitItem
-    if data.canvas and (data.canvas.text or data.canvas.pattern) then price = price + (Config.Price.CustomDesignFee or 0) end
+    if requiresTextureExport then price = price + (Config.Price.CustomDesignFee or 0) end
+
     if not takePayment(source, price) then cb({ ok = false, error = ('Nincs elég %s.'):format(Config.RealCoin.label or 'pénz') }) return end
+
+    if not designId then
+        designId = MySQL.insert.await('INSERT INTO realrpg_clothing_designs (identifier, name, gender, preview_type, skin, components, props, canvas, image) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)', {
+            idf, tostring(data.name or 'RealRPG Design'):sub(1, 80), tostring(data.gender or 'unknown'),
+            tostring(data.previewType or 'hoodie'), json.encode(data.skin or {}), json.encode(data.components or {}),
+            json.encode(data.props or {}), json.encode(data.canvas or {}), data.image and tostring(data.image):sub(1, 15000000) or nil
+        })
+    end
 
     local metadata = {
         label = tostring(data.name or (itemType == 'part' and 'RealRPG Clothing Part' or 'RealRPG Outfit')):sub(1, 80),
@@ -301,15 +379,15 @@ ESX.RegisterServerCallback('realrpg_clothing_designer:orderItem', function(sourc
         skin = data.skin or {},
         components = data.components or {},
         props = data.props or {},
-        canvas = data.canvas or {},
-        image = data.image,
+        designId = designId,
+        requiresTextureExport = requiresTextureExport == true,
         orderPrice = price,
         createdAt = os.date('%Y-%m-%d %H:%M:%S')
     }
 
-    local status = (Config.Orders and Config.Orders.requireAdminApproval) and 'pending' or (Config.Flow.defaultOrderStatus or 'ready')
+    local status = (requiresTextureExport or (Config.Orders and Config.Orders.requireAdminApproval)) and 'pending' or (Config.Flow.defaultOrderStatus or 'ready')
     local orderId = MySQL.insert.await('INSERT INTO realrpg_clothing_orders (identifier, design_id, name, type, metadata, status, price) VALUES (?, ?, ?, ?, ?, ?, ?)', {
-        idf, tonumber(data.designId), metadata.label, itemType, json.encode(metadata), status, price
+        idf, designId, metadata.label, itemType, json.encode(metadata), status, price
     })
 
     if status == 'pending' then
@@ -318,9 +396,10 @@ ESX.RegisterServerCallback('realrpg_clothing_designer:orderItem', function(sourc
     end
 
     local itemName = itemType == 'part' and Config.Inventory.clothingPartItem or Config.Inventory.outfitItem
-    local ok, err = addItem(source, itemName, metadata)
-    if ok then MySQL.update('UPDATE realrpg_clothing_orders SET status = ? WHERE id = ?', { 'ready', orderId }) end
-    cb({ ok = ok, error = err, metadata = ok and metadata or nil, orderId = orderId, status = ok and 'ready' or status })
+    local itemMetadata = compactItemMetadata(metadata, orderId, idf)
+    local ok, err = addItem(source, itemName, itemMetadata)
+    if ok then MySQL.update('UPDATE realrpg_clothing_orders SET status = ?, item_delivered = 1 WHERE id = ?', { 'ready', orderId }) end
+    cb({ ok = ok, error = err, metadata = ok and itemMetadata or nil, orderId = orderId, status = ok and 'ready' or status })
 end)
 
 ESX.RegisterServerCallback('realrpg_clothing_designer:getSkin:server', function(source, cb)
@@ -393,15 +472,18 @@ ESX.RegisterServerCallback('realrpg_clothing_designer:orderSavedDesignItem', fun
     local row = MySQL.single.await('SELECT * FROM realrpg_clothing_designs WHERE id = ? AND identifier = ? LIMIT 1', { id, idf })
     if not row then cb({ ok=false }) return end
     local data = { name=row.name, itemType=itemType or 'outfit', designId=id, gender=row.gender, previewType=row.preview_type, skin=safeJsonDecode(row.skin), components=safeJsonDecode(row.components), props=safeJsonDecode(row.props), canvas=safeJsonDecode(row.canvas), image=row.image }
+    local requiresTextureExport = data.canvas and type(data.canvas.layers) == 'table' and #data.canvas.layers > 0 and data.canvas.template ~= nil
     local price = data.itemType == 'part' and Config.Price.OrderPartItem or Config.Price.OrderOutfitItem
+    if requiresTextureExport then price = price + (Config.Price.CustomDesignFee or 0) end
     if not takePayment(source, price) then cb({ ok=false, error=('Nincs elég %s.'):format(Config.RealCoin.label or 'pénz') }) return end
-    local metadata = { label=tostring(data.name or 'RealRPG Outfit'):sub(1,80), description='RealRPG Clothing Designer mentett dizájn', gender=data.gender, itemType=data.itemType, previewType=data.previewType, skin=data.skin, components=data.components, props=data.props, canvas=data.canvas, image=data.image, orderPrice=price, createdAt=os.date('%Y-%m-%d %H:%M:%S') }
-    local status = (Config.Orders and Config.Orders.requireAdminApproval) and 'pending' or 'ready'
+    local metadata = { label=tostring(data.name or 'RealRPG Outfit'):sub(1,80), description='RealRPG Clothing Designer mentett dizájn', gender=data.gender, itemType=data.itemType, previewType=data.previewType, skin=data.skin, components=data.components, props=data.props, designId=id, requiresTextureExport=requiresTextureExport == true, orderPrice=price, createdAt=os.date('%Y-%m-%d %H:%M:%S') }
+    local status = (requiresTextureExport or (Config.Orders and Config.Orders.requireAdminApproval)) and 'pending' or 'ready'
     local orderId = MySQL.insert.await('INSERT INTO realrpg_clothing_orders (identifier, design_id, name, type, metadata, status, price) VALUES (?, ?, ?, ?, ?, ?, ?)', { idf, id, metadata.label, data.itemType, json.encode(metadata), status, price })
     if status == 'pending' then cb({ ok=true, pending=true, orderId=orderId, status=status, price=price }) return end
     local itemName = data.itemType == 'part' and Config.Inventory.clothingPartItem or Config.Inventory.outfitItem
-    local ok, err = addItem(source, itemName, metadata)
-    if ok then MySQL.update('UPDATE realrpg_clothing_orders SET status = ? WHERE id = ?', { 'ready', orderId }) end
+    local itemMetadata = compactItemMetadata(metadata, orderId, idf)
+    local ok, err = addItem(source, itemName, itemMetadata)
+    if ok then MySQL.update('UPDATE realrpg_clothing_orders SET status = ?, item_delivered = 1 WHERE id = ?', { 'ready', orderId }) end
     cb({ ok=ok, error=err, orderId=orderId, status=ok and 'ready' or status })
 end)
 
@@ -427,7 +509,7 @@ ESX.RegisterServerCallback('realrpg_clothing_designer:adminGiveDesignItem', func
     if not isAdmin(source) or not id then cb({ ok=false, error='Nincs jogosultság.' }) return end
     local row = MySQL.single.await('SELECT * FROM realrpg_clothing_designs WHERE id = ? LIMIT 1', { id })
     if not row then cb({ ok=false }) return end
-    local metadata = { label=tostring(row.name or 'RealRPG Outfit'):sub(1,80), description='Admin által kiadott RealRPG outfit', gender=row.gender, itemType='outfit', previewType=row.preview_type, skin=safeJsonDecode(row.skin), components=safeJsonDecode(row.components), props=safeJsonDecode(row.props), canvas=safeJsonDecode(row.canvas), image=row.image, createdAt=os.date('%Y-%m-%d %H:%M:%S') }
+    local metadata = compactItemMetadata({ label=row.name, description='Admin által kiadott RealRPG outfit', gender=row.gender, itemType='outfit', previewType=row.preview_type, skin=safeJsonDecode(row.skin), components=safeJsonDecode(row.components), props=safeJsonDecode(row.props), designId=row.id }, nil, identifier(source))
     local ok, err = addItem(source, Config.Inventory.outfitItem, metadata)
     cb({ ok=ok, error=err })
 end)
@@ -462,13 +544,35 @@ ESX.RegisterServerCallback('realrpg_clothing_designer:adminListOrders', function
     status = tostring(status or 'pending')
     local q, params
     if status == 'all' then
-        q = 'SELECT id, identifier, design_id, name, type, status, price, note, reviewed_by, reviewed_at, created_at FROM realrpg_clothing_orders ORDER BY id DESC LIMIT ?'
+        q = 'SELECT id, identifier, design_id, name, type, status, price, note, item_delivered, reviewed_by, reviewed_at, created_at FROM realrpg_clothing_orders ORDER BY id DESC LIMIT ?'
         params = { Config.Admin.maxList or 150 }
     else
-        q = 'SELECT id, identifier, design_id, name, type, status, price, note, reviewed_by, reviewed_at, created_at FROM realrpg_clothing_orders WHERE status = ? ORDER BY id DESC LIMIT ?'
+        q = 'SELECT id, identifier, design_id, name, type, status, price, note, item_delivered, reviewed_by, reviewed_at, created_at FROM realrpg_clothing_orders WHERE status = ? ORDER BY id DESC LIMIT ?'
         params = { status, Config.Admin.maxList or 150 }
     end
     cb(MySQL.query.await(q, params) or {})
+end)
+
+ESX.RegisterServerCallback('realrpg_clothing_designer:adminGetOrder', function(source, cb, id)
+    if not isAdmin(source) or not id then cb(nil) return end
+    local row = MySQL.single.await('SELECT * FROM realrpg_clothing_orders WHERE id = ? LIMIT 1', { id })
+    if not row then cb(nil) return end
+    row.metadata = safeJsonDecode(row.metadata)
+    if row.design_id then
+        local design = MySQL.single.await('SELECT * FROM realrpg_clothing_designs WHERE id = ? LIMIT 1', { row.design_id })
+        if design then
+            row.metadata.skin = safeJsonDecode(design.skin)
+            row.metadata.components = safeJsonDecode(design.components)
+            row.metadata.props = safeJsonDecode(design.props)
+            row.metadata.canvas = safeJsonDecode(design.canvas)
+            row.metadata.image = design.image
+            row.metadata.previewType = design.preview_type
+            row.metadata.gender = design.gender
+            row.metadata.label = design.name or row.metadata.label
+            row.metadata.designId = design.id
+        end
+    end
+    cb(row)
 end)
 
 ESX.RegisterServerCallback('realrpg_clothing_designer:adminSetOrderStatus', function(source, cb, id, status, note)
@@ -477,15 +581,25 @@ ESX.RegisterServerCallback('realrpg_clothing_designer:adminSetOrderStatus', func
     if not ({pending=true, approved=true, rejected=true, ready=true, cancelled=true})[status] then cb({ ok=false, error='Hibás státusz.' }) return end
     local row = MySQL.single.await('SELECT * FROM realrpg_clothing_orders WHERE id = ? LIMIT 1', { id })
     if not row then cb({ ok=false, error='Rendelés nem található.' }) return end
+    local currentMetadata = safeJsonDecode(row.metadata)
+    if (status == 'approved' or status == 'ready') and currentMetadata.requiresTextureExport and not currentMetadata.customTexture then
+        cb({ ok=false, error='A rendeléshez előbb exportálni kell az egyedi YTD textúrát.' })
+        return
+    end
     MySQL.update('UPDATE realrpg_clothing_orders SET status = ?, reviewed_by = ?, reviewed_at = NOW(), note = ? WHERE id = ?', { status, GetPlayerName(source) or 'admin', tostring(note or ''):sub(1,255), id })
 
-    if (status == 'approved' or status == 'ready') and Config.Orders and Config.Orders.giveItemOnApprove then
+    if status == 'ready' and Config.Orders and Config.Orders.giveItemOnApprove then
+        if tonumber(row.item_delivered or 0) == 1 then
+            cb({ ok=true, delivered=false, alreadyDelivered=true, status='ready', message='Az item már ki lett adva.' })
+            return
+        end
         local target = findOnlineByIdentifier(row.identifier)
         if target then
             local metadata = safeJsonDecode(row.metadata)
             local itemName = row.type == 'part' and Config.Inventory.clothingPartItem or Config.Inventory.outfitItem
-            local ok, err = addItem(target, itemName, metadata)
-            if ok then MySQL.update('UPDATE realrpg_clothing_orders SET status = ? WHERE id = ?', { 'ready', id }) end
+            local itemMetadata = compactItemMetadata(metadata, id, row.identifier)
+            local ok, err = addItem(target, itemName, itemMetadata)
+            if ok then MySQL.update('UPDATE realrpg_clothing_orders SET status = ?, item_delivered = 1 WHERE id = ?', { 'ready', id }) end
             cb({ ok = ok, delivered = ok, error = err, status = ok and 'ready' or status })
             return
         end
@@ -502,38 +616,23 @@ ESX.RegisterServerCallback('realrpg_clothing_designer:adminDeliverOrder', functi
     if not isAdmin(source) or not id then cb({ ok=false, error='Nincs jogosultság.' }) return end
     local row = MySQL.single.await('SELECT * FROM realrpg_clothing_orders WHERE id = ? LIMIT 1', { id })
     if not row then cb({ ok=false, error='Rendelés nem található.' }) return end
+    if tonumber(row.item_delivered or 0) == 1 then cb({ ok=false, alreadyDelivered=true, error='Az item már ki lett adva.' }) return end
     local target = findOnlineByIdentifier(row.identifier)
     if not target then cb({ ok=false, offline=true, error='A játékos nincs fent.' }) return end
     local metadata = safeJsonDecode(row.metadata)
+    if metadata.requiresTextureExport and not metadata.customTexture then
+        cb({ ok=false, error='A rendeléshez előbb exportálni kell az egyedi YTD textúrát.' })
+        return
+    end
     local itemName = row.type == 'part' and Config.Inventory.clothingPartItem or Config.Inventory.outfitItem
-    local ok, err = addItem(target, itemName, metadata)
-    if ok then MySQL.update('UPDATE realrpg_clothing_orders SET status = ?, reviewed_by = ?, reviewed_at = NOW(), note = ? WHERE id = ?', { 'ready', GetPlayerName(source) or 'admin', 'Item kiadva', id }) end
+    local itemMetadata = compactItemMetadata(metadata, id, row.identifier)
+    local ok, err = addItem(target, itemName, itemMetadata)
+    if ok then MySQL.update('UPDATE realrpg_clothing_orders SET status = ?, item_delivered = 1, reviewed_by = ?, reviewed_at = NOW(), note = ? WHERE id = ?', { 'ready', GetPlayerName(source) or 'admin', 'Item kiadva', id }) end
     cb({ ok=ok, error=err })
 end)
 
-CreateThread(function()
-    Wait(1500)
-    if Config.Inventory.enabled and GetResourceState(Config.Inventory.resource) == 'started' then
-        exports.ox_inventory:RegisterUsableItem(Config.Inventory.outfitItem, function(source, item)
-            TriggerClientEvent('realrpg_clothing_designer:applyMetadataOutfit', source, item and item.metadata or {})
-        end)
-        exports.ox_inventory:RegisterUsableItem(Config.Inventory.clothingPartItem, function(source, item)
-            local md = item and item.metadata or {}
-            local skin = md.skin or {}
-            local key, value, texValue = nil, nil, 0
-            for _, c in ipairs(Config.Components) do
-                if skin[c.key] ~= nil then key = c.key; value = skin[c.key]; texValue = skin[c.tex] or 0; break end
-            end
-            if key then
-                TriggerClientEvent('realrpg_clothing_designer:wearOnOff', source, 'component', { key = key, drawable = value, texture = texValue })
-                return
-            end
-            for _, p in ipairs(Config.Props) do
-                if skin[p.key] ~= nil then key = p.key; value = skin[p.key]; texValue = skin[p.tex] or 0; TriggerClientEvent('realrpg_clothing_designer:wearOnOff', source, 'prop', { key = key, drawable = value, texture = texValue }); return end
-            end
-        end)
-    end
-end)
+-- ox_inventory item usage is implemented with client exports in client/main.lua.
+-- Do not use RegisterUsableItem here; current ox_inventory versions use item client/server exports.
 
 
 
@@ -545,7 +644,7 @@ end
 
 local function runDiagnostics(src)
     local lines = {
-        '^5[RealRPG Clothing Designer V14]^7 Diagnosztika:',
+        ('^5[RealRPG Clothing Designer V%s]^7 Diagnosztika:'):format(Config.Version or '17.0.0'),
         ('  es_extended: %s'):format(resourceState('es_extended')),
         ('  oxmysql: %s'):format(resourceState('oxmysql')),
         ('  %s: %s'):format(Config.Inventory.resource or 'ox_inventory', resourceState(Config.Inventory.resource or 'ox_inventory')),
@@ -553,8 +652,8 @@ local function runDiagnostics(src)
         ('  %s: %s'):format(Config.Target.resource or 'ox_target', resourceState(Config.Target.resource or 'ox_target')),
         ('  appearance: %s'):format(Config.Appearance.system or 'esx_skin'),
         ('  admin ace: %s'):format(Config.AdminPermission or 'realrpg.clothingdesigner.admin'),
-        ('  worker mode: %s%s'):format((Config.Worker and Config.Worker.Mode) or 'inprocess', ((Config.Worker and Config.Worker.Mode) == 'external') and ' (UNSUPPORTED: pure Lua resource cannot spawn a child process, see BUGFIX_NOTES.md)' or ''),
-        ('  worker file: %s'):format((LoadResourceFile(GetCurrentResourceName(), (Config.Worker and Config.Worker.RequiredFile) or 'worker/fivemRpcWorker.cjs') and 'exists' or 'missing')),
+        ('  worker mode: %s'):format((Config.Worker and Config.Worker.Mode) or 'resource'),
+        ('  worker resource: %s'):format(resourceState((Config.Worker and Config.Worker.Resource) or 'realrpg_clothing_worker')),
         ('  filesystem permission line: %s'):format((Config.Permissions and Config.Permissions.FilesystemPermissionLine) or 'n/a'),
         ('  authorization: %s'):format((Config.Authorization and Config.Authorization.Enabled) and 'enabled' or 'disabled'),
         ('  saved designs: %s'):format((Config.SavedDesigns and Config.SavedDesigns.Enabled) and 'enabled' or 'disabled'),
@@ -568,7 +667,7 @@ end
 ESX.RegisterServerCallback('realrpg_clothing_designer:getDiagnostics', function(source, cb)
     cb({
         ok = true,
-        version = '14.0.0',
+        version = Config.Version or '17.0.0',
         isAdmin = isAdmin and isAdmin(source) or false,
         resources = {
             es_extended = resourceState('es_extended'),
@@ -578,10 +677,9 @@ ESX.RegisterServerCallback('realrpg_clothing_designer:getDiagnostics', function(
             target = resourceState(Config.Target.resource or 'ox_target')
         },
         worker = {
-            mode = Config.Worker and Config.Worker.Mode or 'inprocess',
-            requiredFile = Config.Worker and Config.Worker.RequiredFile or 'worker/fivemRpcWorker.cjs',
-            fileExists = LoadResourceFile(GetCurrentResourceName(), (Config.Worker and Config.Worker.RequiredFile) or 'worker/fivemRpcWorker.cjs') ~= nil,
-            powershellPath = Config.Worker and Config.Worker.PowerShellPath or '',
+            mode = Config.Worker and Config.Worker.Mode or 'resource',
+            resource = Config.Worker and Config.Worker.Resource or 'realrpg_clothing_worker',
+            state = resourceState((Config.Worker and Config.Worker.Resource) or 'realrpg_clothing_worker'),
             childProcessLine = Config.Permissions and Config.Permissions.UnsafeChildProcessLine or '',
             filesystemLine = Config.Permissions and Config.Permissions.FilesystemPermissionLine or ''
         },
@@ -637,30 +735,36 @@ local function stripResourceRoot(full, root)
     return full
 end
 
--- BUGFIX (V14): io.popen only allows FXServer's emulated 'ls'/'dir' commands - arbitrary
--- shell commands like 'find' are blocked with "Permission denied" by the FXServer sandbox.
--- That meant this function silently returned 0 files on every server, breaking the whole
--- template-folder auto scan feature. Rewritten to use the documented sandbox-safe
--- io.readdir() API instead, walked recursively.
 local function readAllFiles(folder)
-    local files = {}
+    local files, visited = {}, {}
+    local knownFileExtensions = {
+        ydd = true, ytd = true, ymt = true, ydr = true,
+        png = true, webp = true, jpg = true, jpeg = true,
+        json = true, lua = true, txt = true
+    }
+
     local function walk(dir)
-        local handle = io.readdir(dir)
+        dir = tostring(dir or ''):gsub('\\', '/')
+        if dir == '' or visited[dir] then return end
+        visited[dir] = true
+
+        local handle = io and io.readdir and io.readdir(dir) or nil
         if not handle then return end
+
         for name in handle:lines() do
             if name and name ~= '' and name ~= '.' and name ~= '..' then
                 local full = pathJoin(dir, name)
-                local subHandle = io.readdir(full)
-                if subHandle then
-                    subHandle:close()
+                local ext = lowerExt(name)
+                if knownFileExtensions[ext] then
+                    files[#files + 1] = full
+                elseif name ~= '.keep' then
                     walk(full)
-                else
-                    files[#files + 1] = full:gsub('\\', '/')
                 end
             end
         end
         handle:close()
     end
+
     walk(folder)
     return files
 end
@@ -682,7 +786,7 @@ end
 
 local function parseTemplatePath(relPath)
     local tf = Config.TemplateFlow or {}
-    local root = (tf.templateRoot or 'templates/cloth_templates'):gsub('%.','%%.')
+    local root = (tf.templateRoot or 'templates/cloth_templates'):gsub('%.','%%.'):gsub('/','/')
     local pattern = '^' .. root .. '/([^/]+)/([^/]+)/([^/]+)$'
     local gender, component, fileName = relPath:gsub('\\','/'):match(pattern)
     if not gender or not component or not fileName then
@@ -861,10 +965,10 @@ local function exportAddonInternal(id, addonName)
     local ok, jsonPath, row = exportTemplateJsonInternal(id)
     if not ok then return false, jsonPath end
     addonName = tostring(addonName or ('realrpg_clothing_' .. (row.template_key or row.id))):gsub('[^%w_%-]', '_')
-    -- BUGFIX (V14): fx_version must be the codename ('cerulean'), not a version number.
-    -- Using '14.0.0' here would make every exported addon resource fail to start.
     local manifest = [[fx_version 'cerulean'
 game 'gta5'
+
+version '17.0.0'
 
 files {
     'stream/*.ydd',
@@ -878,46 +982,11 @@ data_file 'SHOP_PED_APPAREL_META_FILE' 'stream/*.ymt'
     local mirrorBase = pathJoin(Config.TemplateFlow.mirrorExportRoot or '../realrpg_clothing_exports', addonName)
     SaveResourceFile(GetCurrentResourceName(), pathJoin(exportBase, 'fxmanifest.lua'), manifest, -1)
     SaveResourceFile(GetCurrentResourceName(), pathJoin(exportBase, 'template.json'), json.encode(row), -1)
-    SaveResourceFile(GetCurrentResourceName(), pathJoin(exportBase, 'README.txt'), 'Addon-first export created by RealRPG Clothing Designer V14. Copy stream files into this resource if they are not mirrored automatically.\nRestart realrpg_clothing_exports after successful export.\n', -1)
-
-    -- BUGFIX (V14): Config.Permissions.RequireFilesystemExportPermission was declared but
-    -- never checked. The mirror export writes OUTSIDE this resource's own folder
-    -- (mirrorExportRoot = '../realrpg_clothing_exports'), which the FXServer sandbox
-    -- blocks by default with "Permission denied" (code 13) unless the server owner has
-    -- added `add_filesystem_permission realrpg_clothing_designer write
-    -- realrpg_clothing_exports` to their server.cfg. We now gate the mirror write behind
-    -- this flag and pcall it so a missing permission degrades gracefully (in-resource
-    -- export still succeeds) instead of silently failing or erroring the whole export.
-    local mirrorWritten, mirrorError = false, nil
-    if Config.Permissions and Config.Permissions.RequireFilesystemExportPermission then
-        -- SaveResourceFile returns false (does not throw) when the sandbox blocks the
-        -- write with "Permission denied" - pcall additionally guards against any other
-        -- unexpected native error so the whole export never crashes because of this.
-        local mOk, r1, r2 = pcall(function()
-            local w1 = SaveResourceFile(GetCurrentResourceName(), pathJoin(mirrorBase, 'fxmanifest.lua'), manifest, -1)
-            local w2 = SaveResourceFile(GetCurrentResourceName(), pathJoin(mirrorBase, 'template.json'), json.encode(row), -1)
-            return w1, w2
-        end)
-        mirrorWritten = mOk == true and r1 == true and r2 == true
-        if not mirrorWritten then
-            mirrorError = mOk and 'SaveResourceFile returned false (likely missing add_filesystem_permission).' or tostring(r1)
-            dbg(('Mirror export write failed (missing filesystem permission?): %s'):format(mirrorError))
-        end
-    else
-        mirrorError = 'RequireFilesystemExportPermission is disabled in config; mirror export skipped.'
-        dbg(mirrorError)
-    end
-
+    SaveResourceFile(GetCurrentResourceName(), pathJoin(exportBase, 'README.txt'), 'Addon-first export created by RealRPG Clothing Designer V17. Copy stream files into this resource if they are not mirrored automatically.\nRestart realrpg_clothing_exports after successful export.\n', -1)
+    SaveResourceFile(GetCurrentResourceName(), pathJoin(mirrorBase, 'fxmanifest.lua'), manifest, -1)
+    SaveResourceFile(GetCurrentResourceName(), pathJoin(mirrorBase, 'template.json'), json.encode(row), -1)
     SaveResourceFile(GetCurrentResourceName(), pathJoin(Config.TemplateFlow.exportRoot or 'exports', addonName .. '.zip.README.txt'), 'FiveM runtime cannot reliably create zip archives on every host. This marker represents the zip output path; zip the exported folder for distribution.\n', -1)
-    return true, {
-        addon = addonName,
-        exportPath = exportBase,
-        mirrorPath = mirrorWritten and mirrorBase or nil,
-        mirrorError = mirrorError,
-        filesystemPermissionLine = (Config.Permissions and Config.Permissions.FilesystemPermissionLine) or nil,
-        jsonPath = jsonPath,
-        restart = mirrorWritten and 'restart realrpg_clothing_exports' or nil
-    }
+    return true, { addon = addonName, exportPath = exportBase, mirrorPath = mirrorBase, jsonPath = jsonPath, restart = 'restart realrpg_clothing_exports' }
 end
 
 exports('scanStreamTemplates', scanTemplateFolders) -- backward-compatible alias
@@ -934,7 +1003,12 @@ end)
 
 ESX.RegisterServerCallback('realrpg_clothing_designer:scanTemplates', function(source, cb)
     if not isAdmin(source) then cb({ ok=false, error='Nincs jogosultság.' }) return end
-    cb(scanTemplateFolders())
+    local ok, result = pcall(function()
+        return exports[GetCurrentResourceName()]:bridgeRescanTemplates()
+    end)
+    if not ok then cb({ ok=false, error='Template scan hiba.', detail=tostring(result) }) return end
+    result.ok = true
+    cb(result)
 end)
 
 ESX.RegisterServerCallback('realrpg_clothing_designer:registerTemplate', function(source, cb, data)
@@ -969,19 +1043,22 @@ ESX.RegisterServerCallback('realrpg_clothing_designer:exportAddon', function(sou
     cb({ ok=ok, result=result })
 end)
 
-CreateThread(function()
-    Wait(2200)
-    if Config.TemplateFlow and Config.TemplateFlow.enabled and Config.TemplateFlow.autoScanTemplatesOnStart then
-        local res = scanTemplateFolders()
-        dbg(('Template folder scan done: scanned=%s registered=%s skipped=%s previews=%s slots=%s'):format(res.scanned or 0, res.registered or 0, res.skipped or 0, res.generatedPreviews or 0, res.slots or 0))
-    end
-end)
-
+-- The legacy shell-based scanner is retained only as an export for old integrations.
+-- V17 startup and commands use the filetype-safe bridge scanner in server/texture_bridge.lua.
 RegisterCommand(Config.TemplateCommand or 'clothingtemplates', function(src)
     if src > 0 and not IsPlayerAceAllowed(src, Config.AdminPermission) then return end
-    local res = scanTemplateFolders()
-    local rows = listTemplateRows('all', 'all')
-    local msg = ('Template scan: %s scanned, %s registered, %s skipped, %s generated previews, %s slot folders. Total active: %s'):format(res.scanned or 0, res.registered or 0, res.skipped or 0, res.generatedPreviews or 0, res.slots or 0, #rows)
+    local ok, res = pcall(function()
+        return exports[GetCurrentResourceName()]:bridgeRescanTemplates()
+    end)
+    local msg
+    if ok and type(res) == 'table' then
+        msg = ('Template scan: %s file, %s YDD, %s regisztrálva, %s kihagyva. Aktív: %s'):format(
+            res.filesFound or 0, res.yddTemplates or 0, res.registered or 0, res.skipped or 0,
+            res.catalog and #res.catalog or 0
+        )
+    else
+        msg = 'Template scan hiba: ' .. tostring(res)
+    end
     if src > 0 then TriggerClientEvent('chat:addMessage', src, { args = { 'RCD', msg } }) else print('[RCD] ' .. msg) end
 end, true)
 
@@ -992,9 +1069,6 @@ ESX.RegisterServerCallback('realrpg_clothing:getSkin:server', function(source, c
     local row = MySQL.single.await('SELECT skin FROM users WHERE identifier = ? LIMIT 1', { idf })
     cb(safeJsonDecode(row and row.skin or nil))
 end)
-
--- BUGFIX (V14): removed duplicate registration of 'realrpg_clothing_designer:getSkin:server'
--- (already registered near the top of the file with an identical body).
 
 local function openClothingMenuForTarget(src, target, menuType, restricted)
     target = tonumber(target)
@@ -1034,24 +1108,8 @@ ESX.RegisterServerCallback('realrpg_clothing_designer:getPriceForSelection', fun
     cb(price)
 end)
 
--- BUGFIX (V14): Config.CharacterFinalized was declared but never invoked from anywhere.
--- Wired it to a net event fired by the client once a character-creation session is
--- finalized (see client/main.lua closeDesigner()).
-RegisterNetEvent('realrpg_clothing_designer:characterFinalized', function()
-    local src = source
-    if type(Config.CharacterFinalized) == 'function' then
-        local ok, err = pcall(Config.CharacterFinalized, src)
-        if not ok then dbg('CharacterFinalized hook error:', err) end
-    end
-end)
-
 
 -- V12 troubleshooting/auth compatibility layer.
--- BUGFIX (V14): grantPlayerAccess/revokePlayerAccess/hasPlayerAccess were exported TWICE
--- (here, and again further down next to the V14 RPC exports) - the second registration
--- silently overwrote this one. Now that both implementations share the same underlying
--- store, this first set is kept as the single source of truth and the duplicate further
--- down was removed.
 exports('grantPlayerAccess', function(src, minutes)
     return grantAccess(src, minutes)
 end)
@@ -1078,7 +1136,7 @@ end)
 
 ESX.RegisterServerCallback('realrpg_clothing_designer:checkAccess', function(source, cb, context)
     if not (Config.Authorization and Config.Authorization.Enabled) then cb({ ok = true }) return end
-    if context == 'command' and Config.Authorization.AllowCommandOpen then cb({ ok = true }) return end
+    if (context == 'command' and Config.Authorization.AllowCommandOpen) or context == 'shop' or context == 'item' or context == 'internal' then cb({ ok = true }) return end
     if hasGrantedAccess(source) then cb({ ok = true }) return end
     cb({ ok = false, error = Config.Authorization.NotAuthorizedMessage or 'not_authorized' })
 end)
@@ -1095,10 +1153,10 @@ ESX.RegisterServerCallback('realrpg_clothing_designer:getTroubleshootingBundle',
         savedDesigns = Config.SavedDesigns or {},
         ai = { enabled = Config.AI and Config.AI.Enabled or false, provider = Config.AI and Config.AI.Provider or 'none', model = Config.AI and Config.AI.Model or '' },
         notes = {
-            'Ha external worker kell: add_unsafe_child_process_permission realrpg_clothing_designer',
-            'Ha addon export írni akar realrpg_clothing_exports mappába: add_filesystem_permission realrpg_clothing_designer write realrpg_clothing_exports',
+            'Worker indítás: add_unsafe_child_process_permission realrpg_clothing_worker',
+            'YTD export: add_filesystem_permission realrpg_clothing_worker write realrpg_clothing_designer',
             'Preview/static file változás után: refresh + restart realrpg_clothing_designer',
-            'Sikeres addon export után: restart realrpg_clothing_exports'
+            'Sikeres YTD export után: restart realrpg_clothing_designer'
         }
     })
 end)
@@ -1106,10 +1164,9 @@ end)
 RegisterCommand('rcd_troubleshoot', function(src)
     if src > 0 and not IsPlayerAceAllowed(src, Config.AdminPermission) then return end
     local lines = {
-        '[RCD V12 Troubleshooting]',
-        ('Worker mode: %s%s'):format((Config.Worker and Config.Worker.Mode) or 'inprocess', ((Config.Worker and Config.Worker.Mode) == 'external') and ' (UNSUPPORTED in a Lua resource)' or ''),
-        ('Worker file: %s'):format((LoadResourceFile(GetCurrentResourceName(), (Config.Worker and Config.Worker.RequiredFile) or 'worker/fivemRpcWorker.cjs') and 'exists' or 'missing')),
-        ('PowerShell path: %s'):format((Config.Worker and Config.Worker.PowerShellPath ~= '' and Config.Worker.PowerShellPath) or 'default'),
+        '[RCD V17 Troubleshooting]',
+        ('Worker mode: %s'):format((Config.Worker and Config.Worker.Mode) or 'resource'),
+        ('Worker resource: %s'):format(resourceState((Config.Worker and Config.Worker.Resource) or 'realrpg_clothing_worker')),
         ('Child process permission: %s'):format((Config.Permissions and Config.Permissions.UnsafeChildProcessLine) or 'n/a'),
         ('Filesystem permission: %s'):format((Config.Permissions and Config.Permissions.FilesystemPermissionLine) or 'n/a'),
         ('Saved designs: %s'):format((Config.SavedDesigns and Config.SavedDesigns.Enabled) and 'enabled' or 'disabled'),
@@ -1122,60 +1179,44 @@ end, true)
 
 
 -- V14: RealRPG-style Exports and RPC / authorization flow
--- BUGFIX (V14): rcdGrantAccess/rcdRevokeAccess/rcdHasAccess used to keep a second,
--- independent access table (rcdAuthorizedPlayers) instead of the shared `sharedAccess`
--- table used by grantAccess()/hasGrantedAccess() above. That meant granting access via
--- grantPlayerAccess() (the exported/legacy API) did nothing for the RPC-gated
--- client:openClothingDesigner flow, and vice versa - players could be "authorized" by
--- one system and still get rejected by the other. Now both paths share one store.
+local rcdAuthorizedPlayers = rcdAuthorizedPlayers or {}
+
 local function _rcdPlayerKey(src)
     src = tonumber(src)
     if not src or src <= 0 then return nil end
-    return src
+    return tostring(src)
 end
 
 local function rcdGrantAccess(src)
-    local key = _rcdPlayerKey(src)
-    if not key then return false end
-    return grantAccess(key)
+    return grantAccess(src)
 end
 
 local function rcdRevokeAccess(src)
-    local key = _rcdPlayerKey(src)
-    if not key then return false end
-    revokeAccess(key)
+    revokeAccess(src)
     return true
 end
 
--- BUGFIX (V14): Config.RPC.enabled was declared but never checked - the RPC-gated open
--- flow always ran the authorization check regardless of this flag. Now `enabled = false`
--- fully bypasses RPC authorization (same behavior as requireAuthorization = false).
 local function rcdHasAccess(src)
-    local key = _rcdPlayerKey(src)
-    if not key then return false end
-    if not (Config.RPC and Config.RPC.enabled) then return true end
     if not (Config.RPC and Config.RPC.requireAuthorization) then return true end
-    local ok = hasGrantedAccess(key)
-    -- BUGFIX (V14): Config.RPC.debugDeniedCalls was declared but nothing ever logged
-    -- denied RPC access attempts, making it impossible to diagnose "not_authorized"
-    -- reports from players/admins.
-    if not ok and Config.RPC and Config.RPC.debugDeniedCalls then
-        dbg(('RPC access denied for source %s'):format(tostring(src)))
-    end
-    return ok
+    return hasGrantedAccess(src)
 end
 
 local function rcdTemplateCatalog()
     local rows = {}
     if MySQL and MySQL.query and MySQL.query.await then
-        rows = MySQL.query.await('SELECT id, name, file_name, file_type, category, gender, preview_type, component_key, template_key, template_path, preview_path, slot_path, managed_preview, active, skipped_reason, updated_at FROM realrpg_clothing_templates ORDER BY gender, category, file_name', {}) or {}
+        rows = MySQL.query.await('SELECT id, name, file_name, file_type, category, gender, preview_type, component_key, model_name, texture_name, drawable, texture, image, meta, template_key, template_path, preview_path, slot_path, managed_preview, active, skipped_reason, updated_at FROM realrpg_clothing_templates WHERE active = 1 ORDER BY gender, category, drawable, file_name', {}) or {}
+    end
+    for _, row in ipairs(rows) do
+        row.meta = safeJsonDecode(row.meta)
+        row.texture_path = row.meta.texturePath or row.meta.ytdPath
+        row.ytd_path = row.meta.ytdPath or row.meta.texturePath
     end
     return rows
 end
 
 local function rcdRuntimeConfig()
     return {
-        version = Config.Version or '14.0.0',
+        version = Config.Version or '17.0.0',
         rpc = Config.RPC or {},
         worker = Config.Worker or {},
         authorization = Config.Authorization or {},
@@ -1191,19 +1232,16 @@ local function rcdRuntimeConfig()
 end
 
 local function rcdRescanTemplates()
-    if scanTemplateFolders then
-        local result = scanTemplateFolders()
-        return result.catalog or result
-    end
-    if scanTemplateStream then scanTemplateStream() end
+    local ok, result = pcall(function()
+        return exports[GetCurrentResourceName()]:bridgeRescanTemplates()
+    end)
+    if ok and type(result) == 'table' then return result.catalog or result end
     return rcdTemplateCatalog()
 end
 
 exports('getRuntimeConfig', rcdRuntimeConfig)
 exports('getTemplateCatalog', rcdTemplateCatalog)
 exports('rescanTemplates', rcdRescanTemplates)
--- BUGFIX (V14): removed duplicate grantPlayerAccess/revokePlayerAccess/hasPlayerAccess
--- export registrations (already exported above with the shared access store).
 exports('openForPlayer', function(src)
     if rcdGrantAccess(src) then
         TriggerClientEvent('realrpg_clothing_designer:client:openClothingDesigner', tonumber(src))
@@ -1222,7 +1260,6 @@ ESX.RegisterServerCallback('realrpg_clothing_designer:getRuntimeConfig', functio
 end)
 
 ESX.RegisterServerCallback('realrpg_clothing_designer:getTemplateCatalog', function(source, cb)
-    if not rcdHasAccess(source) and not IsPlayerAceAllowed(source, Config.AdminPermission or 'realrpg.clothingdesigner.admin') then cb({ ok=false, error='not_authorized' }) return end
     cb({ ok=true, catalog=rcdTemplateCatalog() })
 end)
 
@@ -1274,8 +1311,8 @@ end, true)
 RegisterCommand((Config.AdminCommandsRealRPG and Config.AdminCommandsRealRPG.stats) or 'clothingdesignerstats', function(src)
     if src > 0 and not IsPlayerAceAllowed(src, Config.AdminPermission or 'realrpg.clothingdesigner.admin') then return end
     local catalog = rcdTemplateCatalog(); local authCount = 0
-    for _ in pairs(sharedAccess) do authCount = authCount + 1 end
-    local msg = ('templates=%s authorized=%s version=%s'):format(#catalog, authCount, Config.Version or '14.0.0')
+    for _ in pairs(rcdAuthorizedPlayers) do authCount = authCount + 1 end
+    local msg = ('templates=%s authorized=%s version=%s'):format(#catalog, authCount, Config.Version or '17.0.0')
     if src > 0 then TriggerClientEvent('chat:addMessage', src, { args = { 'RCD Stats', msg } }) else print('[RCD Stats] '..msg) end
 end, true)
 
@@ -1287,3 +1324,58 @@ RegisterCommand((Config.AdminCommandsRealRPG and Config.AdminCommandsRealRPG.res
 end, true)
 
 AddEventHandler('playerDropped', function() rcdRevokeAccess(source) end)
+
+
+-- V15: current model editor addon export request from UI
+ESX.RegisterServerCallback('realrpg_clothing_designer:exportCurrentAddon', function(source, cb, data)
+    if not IsPlayerAceAllowed(source, Config.AdminPermission or 'realrpg.clothingdesigner.admin') then
+        cb({ ok = false, error = 'not_authorized' })
+        return
+    end
+    data = data or {}
+    local exportName = tostring(data.template or ('realrpg_export_' .. os.time())):gsub('[^%w_%-]', '_')
+    local payload = {
+        name = exportName,
+        author = GetPlayerName(source) or 'RealRPG',
+        createdAt = os.date('%Y-%m-%d %H:%M:%S'),
+        layers = data.layers or {},
+        slots = data.slots or {},
+        image = data.image,
+        note = 'V15 model texture editor export payload. Final ytd/ydd writing is handled by the worker/stream integration.'
+    }
+    local folder = 'exports/' .. exportName
+    SaveResourceFile(GetCurrentResourceName(), folder .. '/design.json', json.encode(payload), -1)
+    cb({ ok = true, path = folder .. '/design.json' })
+end)
+
+
+-- V16: seed the exact jbib clothing files supplied by the user into the template catalog.
+local function seedKnownClothingModels()
+    if not Config.KnownClothingModels then return end
+    for _, m in ipairs(Config.KnownClothingModels) do
+        local fileName = m.ydd or m.fileName or (m.key .. '.ydd')
+        local exists = MySQL.single.await('SELECT id FROM realrpg_clothing_templates WHERE file_name = ? LIMIT 1', { fileName })
+        local meta = {
+            source = 'Config.KnownClothingModels',
+            ydd = m.ydd,
+            ytd = m.ytd,
+            prefixedYdd = m.prefixedYdd,
+            prefixedYtd = m.prefixedYtd,
+            txd = m.txd,
+            txn = m.txn,
+            componentId = m.componentId,
+            note = 'Freemode clothing component mapping. Standalone 3D object preview requires exported object/worker output.'
+        }
+        if exists then
+            MySQL.update.await('UPDATE realrpg_clothing_templates SET name = ?, file_type = ?, category = ?, gender = ?, preview_type = ?, component_key = ?, model_name = ?, texture_name = ?, drawable = ?, texture = ?, meta = ?, active = 1, updated_at = NOW() WHERE file_name = ?', {
+                m.label or m.key, 'ydd', m.component or 'jbib', m.gender or 'male', m.previewType or 'jbib', m.component or 'jbib', m.key, m.ytd or '', m.drawable or 0, m.texture or 0, json.encode(meta), fileName
+            })
+        else
+            MySQL.insert.await('INSERT INTO realrpg_clothing_templates (name, file_name, file_type, category, gender, preview_type, component_key, model_name, texture_name, drawable, texture, meta, active, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, NOW())', {
+                m.label or m.key, fileName, 'ydd', m.component or 'jbib', m.gender or 'male', m.previewType or 'jbib', m.component or 'jbib', m.key, m.ytd or '', m.drawable or 0, m.texture or 0, json.encode(meta)
+            })
+        end
+    end
+end
+
+-- KnownClothingModels remains a manual compatibility helper; the V17 scanner only registers files that really exist.
