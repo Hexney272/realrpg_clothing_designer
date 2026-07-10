@@ -1169,6 +1169,14 @@ RegisterNUICallback('loadTemplateForPreview', function(data, cb)
         elseif previewPed and data and data.category == 'jbib' and data.drawable then
             SetPedComponentVariation(previewPed, 11, tonumber(data.drawable) or 0, tonumber(data.texture) or 0, 2)
         end
+        -- Ensure camera focuses on the correct area after loading template
+        Wait(100)
+        local previewData = Config.PreviewObjects[previewState.previewType]
+        if previewData and previewData.focus then
+            focusCamera(previewData.focus)
+        else
+            focusCamera('torso')
+        end
     end
     cb({ ok = true })
 end)
